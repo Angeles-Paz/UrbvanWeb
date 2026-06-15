@@ -5,7 +5,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Urbvan — Seguimiento</title>
+    <title>Urbvan - Seguimiento</title>
     <link rel="stylesheet" href="https://atlas.microsoft.com/sdk/javascript/mapcontrol/3/atlas.min.css"/>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -31,6 +31,7 @@
             justify-content: space-between; padding: 0 24px;
         }
         .nav-logo { font-size: 18px; font-weight: 600; color: var(--verde-dark); }
+        .nav-logo-img { height: 46px; width: auto; display: block; object-fit: contain; }
         .nav-right { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--texto-2); }
         .nav-right strong { color: var(--texto); font-weight: 500; }
         .btn-nav { font-size: 12px; color: var(--texto-3); text-decoration: none; padding: 5px 12px; border: 1px solid var(--borde); border-radius: 20px; }
@@ -95,23 +96,22 @@
     String idStr = (String) request.getAttribute("id_viaje");
     if (idStr == null) idStr = request.getParameter("id");
     Viaje viaje = null;
-    String nombreOp = "—", telefonoOp = "—", vehiculoOp = "—", placaOp = "—";
+    String nombreOp = "-", telefonoOp = "-", vehiculoOp = "-", placaOp = "-";
     try {
         viaje = new ViajeDAO().buscarPorId(Integer.parseInt(idStr));
-        if (viaje != null && viaje.getIdOperador() > 0) {
+        if (viaje != null && viaje.getOperadorId() > 0) {
             java.sql.Connection conn = mx.urbvan.dao.ConexionDB.obtener();
             java.sql.PreparedStatement ps = conn.prepareStatement(
-                "SELECT CONCAT(o.nombre,' ',o.apellido) AS nombre, o.telefono, " +
-                "CONCAT(v.marca,' ',v.modelo) AS vehiculo, v.placa " +
-                "FROM operadores o LEFT JOIN vehiculos v ON v.id_vehiculo = o.id_vehiculo " +
-                "WHERE o.id_operador = ?");
-            ps.setInt(1, viaje.getIdOperador());
+                "SELECT u.nombre, u.telefono, CONCAT(COALESCE(v.marca,''),' ',COALESCE(v.modelo,'')) AS vehiculo, v.placa " +
+                "FROM usuarios u LEFT JOIN vehiculos v ON v.operador_id = u.id " +
+                "WHERE u.id = ?");
+            ps.setInt(1, viaje.getOperadorId());
             java.sql.ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                nombreOp   = rs.getString("nombre");
-                telefonoOp = rs.getString("telefono") != null ? rs.getString("telefono") : "—";
-                vehiculoOp = rs.getString("vehiculo") != null ? rs.getString("vehiculo") : "—";
-                placaOp    = rs.getString("placa")    != null ? rs.getString("placa")    : "—";
+                nombreOp   = rs.getString("nombre") != null ? rs.getString("nombre") : "-";
+                telefonoOp = rs.getString("telefono") != null ? rs.getString("telefono") : "-";
+                vehiculoOp = rs.getString("vehiculo") != null ? rs.getString("vehiculo").trim() : "-";
+                placaOp    = rs.getString("placa")    != null ? rs.getString("placa")    : "-";
             }
             conn.close();
         }
@@ -119,7 +119,7 @@
     if (viaje == null) { response.sendRedirect(request.getContextPath() + "/pasajero/dashboard"); return; }
 %>
 <nav>
-    <span class="nav-logo">Urbvan</span>
+    <div class="nav-logo"><img src="${pageContext.request.contextPath}/assets/img/Logo_UrbvanPasajero.png" alt="Urbvan" class="nav-logo-img"></div>
     <div class="nav-right">
         Hola, <strong>${sessionScope.nombre}</strong>
         <a href="${pageContext.request.contextPath}/pasajero/dashboard" class="btn-nav">Mi cuenta</a>
@@ -158,10 +158,10 @@
     </div>
     <div class="info-viaje">
         <div class="info-titulo">Tu ruta</div>
-        <div class="info-fila"><span class="info-dot dot-origen"></span><span class="info-texto"><%= viaje.getOrigenDireccion() != null ? viaje.getOrigenDireccion() : "Origen" %></span></div>
-        <div class="info-fila"><span class="info-dot dot-destino"></span><span class="info-texto"><%= viaje.getDestinoDireccion() != null ? viaje.getDestinoDireccion() : "Destino" %></span></div>
+        <div class="info-fila"><span class="info-dot dot-origen"></span><span class="info-texto"><%= viaje.getOrigenNombre() != null ? viaje.getOrigenNombre() : "Origen" %></span></div>
+        <div class="info-fila"><span class="info-dot dot-destino"></span><span class="info-texto"><%= viaje.getDestinoNombre() != null ? viaje.getDestinoNombre() : "Destino" %></span></div>
     </div>
-    <div class="info-operador <%= viaje.getIdOperador() > 0 ? "visible" : "" %>" id="info-operador">
+    <div class="info-operador <%= viaje.getOperadorId() > 0 ? "visible" : "" %>" id="info-operador">
         <div class="op-titulo">Tu operador</div>
         <div class="op-fila"><span>Nombre</span><strong><%= nombreOp %></strong></div>
         <div class="op-fila"><span>Teléfono</span><strong><%= telefonoOp %></strong></div>
@@ -169,7 +169,8 @@
         <div class="op-fila"><span>Placa</span><strong><%= placaOp %></strong></div>
     </div>
     <div class="acciones">
-        <% if (viaje.getEstado() == mx.urbvan.modelo.Viaje.Estado.EN_ASIGNACION ||
+        <% if (viaje.getEstado() == mx.urbvan.modelo.Viaje.Estado.SOLICITADO ||
+               viaje.getEstado() == mx.urbvan.modelo.Viaje.Estado.ASIGNADO ||
                viaje.getEstado() == mx.urbvan.modelo.Viaje.Estado.ACEPTADO) { %>
         <button type="button" class="btn-cancelar" onclick="abrirModalCancelar()">
             Cancelar viaje
@@ -202,8 +203,8 @@
         </div>
         <textarea id="comentario-cal" placeholder="Comentario opcional..."></textarea>
         <form method="POST" action="${pageContext.request.contextPath}/pasajero/calificar" id="form-cal">
-            <input type="hidden" name="id_viaje"    value="<%= viaje.getIdViaje() %>">
-            <input type="hidden" name="id_operador" value="<%= viaje.getIdOperador() %>">
+            <input type="hidden" name="id_viaje"    value="<%= viaje.getId() %>">
+            <input type="hidden" name="id_operador" value="<%= viaje.getOperadorId() %>">
             <input type="hidden" name="puntuacion"  id="puntuacion-input" value="0">
             <input type="hidden" name="comentario"  id="comentario-input" value="">
             <button type="submit" class="btn-enviar-cal">Enviar calificación</button>
@@ -213,16 +214,20 @@
 </div>
 
 <script>
-    var AZURE_KEY   = '1iXcaVW3TPpFb16nqn0fOdmUzXa9PTEIUz67L6z8IhMUGCgC3CazJQQJ99CEAC8vTInh3jNvAAAgAZMPPoqn';
+    var AZURE_KEY   = '<%= application.getInitParameter("azure.maps.key") %>';
     var CTX_PATH    = '${pageContext.request.contextPath}';
-    var ID_VIAJE    = <%= viaje.getIdViaje() %>;
-    var ORIGEN_LAT  = <%= viaje.getOrigenLat() %>;
-    var ORIGEN_LNG  = <%= viaje.getOrigenLng() %>;
-    var DESTINO_LAT = <%= viaje.getDestinoLat() %>;
-    var DESTINO_LNG = <%= viaje.getDestinoLng() %>;
+    var ID_VIAJE    = <%= viaje.getId() %>;
+    var VIAJE_ORIGEN  = [<%= viaje.getOrigenLng() %>, <%= viaje.getOrigenLat() %>];
+    var VIAJE_DESTINO = [<%= viaje.getDestinoLng() %>, <%= viaje.getDestinoLat() %>];
+    var ORIGEN_LNG = VIAJE_ORIGEN[0];
+    var ORIGEN_LAT = VIAJE_ORIGEN[1];
+    var DESTINO_LNG = VIAJE_DESTINO[0];
+    var DESTINO_LAT = VIAJE_DESTINO[1];
+    var TRACKING_URL  = CTX_PATH + '/pasajero/tracking-data';
+    var ESTADO_VIAJE_INICIAL = '<%= viaje.getEstado().name() %>';
 </script>
 <script src="https://atlas.microsoft.com/sdk/javascript/mapcontrol/3/atlas.min.js"></script>
-<script src="${pageContext.request.contextPath}/assets/js/seguimiento.js"></script>
+<script src="${pageContext.request.contextPath}/assets/js/seguimiento.js?v=5"></script>
 <script>
     function abrirCalificacion() {
         document.getElementById('modal-cal').classList.add('visible');
@@ -270,7 +275,7 @@
                 Mantener viaje
             </button>
             <form method="POST" action="${pageContext.request.contextPath}/pasajero/cancelar">
-                <input type="hidden" name="id_viaje" value="<%= viaje.getIdViaje() %>">
+                <input type="hidden" name="id_viaje" value="<%= viaje.getId() %>">
                 <button type="submit"
                     style="width:100%;padding:12px;border-radius:10px;border:none;
                            background:var(--error);color:white;

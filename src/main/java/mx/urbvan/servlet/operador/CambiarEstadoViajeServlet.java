@@ -1,103 +1,50 @@
 package mx.urbvan.servlet.operador;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
-import mx.urbvan.dao.ConexionDB;
 import mx.urbvan.dao.ViajeDAO;
 import mx.urbvan.modelo.Viaje;
-
 import java.io.IOException;
-import java.sql.*;
 
 /**
- * CambiarEstadoViajeServlet — controla el progreso del viaje desde el operador.
- *
- * Acciones válidas:
- *   en_camino   → OPERADOR_EN_CAMINO  (salió hacia el pasajero)
- *   iniciar     → VIAJE_INICIADO      (recogió al pasajero)
- *   completar   → COMPLETADO          (llegaron al destino)
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/operador/CambiarEstadoViajeServlet.java
+ * CambiarEstadoViajeServlet - operador avanza el estado del viaje activo.
+ * CAMBIOS vs v1: usa Viaje.Estado enum con toDb()/fromDb() para comparaciones seguras.
+ * Transiciones válidas: aceptado→en_camino→en_curso→completado
  */
+@WebServlet("/operador/cambiar-estado")
 public class CambiarEstadoViajeServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        req.setCharacterEncoding("UTF-8");
-
-        int    idOperador = (int) req.getSession().getAttribute("id");
-        String idViajeStr = req.getParameter("id_viaje");
-        String accion     = req.getParameter("accion");
-
-        if (idViajeStr == null || accion == null) {
-            res.sendRedirect(req.getContextPath() + "/operador/panel");
-            return;
-        }
-
+            throws IOException, jakarta.servlet.ServletException {
+        int uid     = (int) req.getSession().getAttribute("id");
+        int viajeId = Integer.parseInt(req.getParameter("viajeId"));
+        String accion = req.getParameter("accion"); // "en_camino"|"en_curso"|"completar"|"cancelar"
         try {
-            int   idViaje = Integer.parseInt(idViajeStr);
-            Viaje viaje   = new ViajeDAO().buscarPorId(idViaje);
-
-            // Validar que el viaje pertenece a este operador
-            if (viaje == null || viaje.getIdOperador() != idOperador) {
+            Viaje v = ViajeDAO.buscarPorId(viajeId);
+            if (v == null || v.getOperadorId() != uid) {
                 res.sendRedirect(req.getContextPath() + "/operador/panel");
                 return;
             }
-
-            switch (accion) {
-
-                case "en_camino" -> {
-                    // Operador confirma que salió hacia el pasajero
-                    new ViajeDAO().actualizarEstado(idViaje, Viaje.Estado.OPERADOR_EN_CAMINO);
-                    res.sendRedirect(req.getContextPath() +
-                        "/operador/viaje-activo?id=" + idViaje);
-                }
-
-                case "iniciar" -> {
-                    // Operador confirmó que llegó al origen y recogió al pasajero
-                    new ViajeDAO().actualizarEstado(idViaje, Viaje.Estado.VIAJE_INICIADO);
-                    res.sendRedirect(req.getContextPath() +
-                        "/operador/viaje-activo?id=" + idViaje);
-                }
-
-                case "completar" -> {
-                    // Llegaron al destino
-                    new ViajeDAO().actualizarEstado(idViaje, Viaje.Estado.COMPLETADO);
-
-                    try (Connection conn = ConexionDB.obtener()) {
-                        // Liberar al operador
-                        String sqlOp = "UPDATE operadores SET disponible = 1 WHERE id_operador = ?";
-                        try (PreparedStatement ps = conn.prepareStatement(sqlOp)) {
-                            ps.setInt(1, idOperador);
-                            ps.executeUpdate();
-                        }
-
-                        // Recalcular calificación promedio del operador
-                        String sqlCal = """
-                            UPDATE operadores SET calificacion_prom = (
-                                SELECT COALESCE(AVG(puntuacion), 5.00)
-                                FROM calificaciones WHERE id_operador = ?
-                            ) WHERE id_operador = ?
-                            """;
-                        try (PreparedStatement ps = conn.prepareStatement(sqlCal)) {
-                            ps.setInt(1, idOperador);
-                            ps.setInt(2, idOperador);
-                            ps.executeUpdate();
-                        }
-                    }
-
-                    res.sendRedirect(req.getContextPath() +
-                        "/operador/panel?viaje=completado");
-                }
-
-                default -> res.sendRedirect(req.getContextPath() + "/operador/panel");
+            Viaje.Estado nuevoEstado = switch (accion) {
+                case "en_camino"  -> Viaje.Estado.EN_CAMINO;
+                case "en_curso"   -> Viaje.Estado.EN_CURSO;
+                case "completar"  -> Viaje.Estado.COMPLETADO;
+                case "cancelar"   -> Viaje.Estado.CANCELADO;
+                default -> v.getEstado();
+            };
+            if ("cancelar".equals(accion)) {
+                ViajeDAO.cancelar(viajeId, "operador");
+            } else {
+                ViajeDAO.actualizarEstado(viajeId, nuevoEstado);
             }
-
+            if (nuevoEstado == Viaje.Estado.COMPLETADO || nuevoEstado == Viaje.Estado.CANCELADO) {
+                res.sendRedirect(req.getContextPath() + "/operador/panel");
+            } else {
+                res.sendRedirect(req.getContextPath() + "/operador/viaje-activo");
+            }
         } catch (Exception e) {
-            res.sendRedirect(req.getContextPath() +
-                "/operador/panel?error=" + e.getMessage());
+            res.sendRedirect(req.getContextPath() + "/operador/viaje-activo");
         }
     }
 }

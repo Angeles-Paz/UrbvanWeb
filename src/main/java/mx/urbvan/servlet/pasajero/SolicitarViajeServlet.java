@@ -1,134 +1,89 @@
 package mx.urbvan.servlet.pasajero;
 
 import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
-import mx.urbvan.dao.ConexionDB;
 import mx.urbvan.dao.ViajeDAO;
+import mx.urbvan.dao.VehiculoDAO;
 import mx.urbvan.modelo.Viaje;
-
 import java.io.IOException;
-import java.sql.*;
 
 /**
- * SolicitarViajeServlet
- *
- * GET  → muestra el mapa para seleccionar origen y destino
- * POST → valida coordenadas, calcula precio, crea el viaje y
- *        redirige a la pantalla de pago
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/pasajero/SolicitarViajeServlet.java
+ * SolicitarViajeServlet - crea el viaje en BD y redirige a pago.
+ * CAMBIOS vs v1: usa nuevos nombres de campo del modelo Viaje.
  */
+@WebServlet("/pasajero/solicitar")
 public class SolicitarViajeServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse res)
             throws ServletException, IOException {
-
-        int idUsuario = (int) req.getSession().getAttribute("id");
-
-        // Si ya tiene un viaje activo, redirigir al seguimiento
+        // Mostrar mapa de solicitud - verificar que no haya viaje activo
         try {
-            Viaje activo = new ViajeDAO().buscarActivoPorUsuario(idUsuario);
+            int uid = (int) req.getSession().getAttribute("id");
+            Viaje activo = ViajeDAO.buscarActivoPasajero(uid);
             if (activo != null) {
-                res.sendRedirect(req.getContextPath() + "/pasajero/estado-viaje?id=" + activo.getIdViaje());
+                req.setAttribute("viaje", activo);
+                req.getRequestDispatcher("/WEB-INF/vistas/pasajero/estado.jsp").forward(req, res);
                 return;
             }
+        } catch (Exception ignored) {}
+        try {
+            req.setAttribute("vehiculosB2C", VehiculoDAO.listarB2CDisponibles());
         } catch (Exception e) {
-            // Si falla la consulta, mostramos el mapa de todas formas
+            req.setAttribute("error", "No se pudieron cargar las unidades disponibles.");
         }
-
-        req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar-viaje.jsp")
-           .forward(req, res);
+        req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar.jsp").forward(req, res);
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse res)
             throws ServletException, IOException {
-
         req.setCharacterEncoding("UTF-8");
-
-        // --- Leer parámetros del formulario enviado por el mapa ---
-        String origenLatStr  = req.getParameter("origen_lat");
-        String origenLngStr  = req.getParameter("origen_lng");
-        String origenDir     = req.getParameter("origen_direccion");
-        String destinoLatStr = req.getParameter("destino_lat");
-        String destinoLngStr = req.getParameter("destino_lng");
-        String destinoDir    = req.getParameter("destino_direccion");
-        String distanciaStr  = req.getParameter("distancia_km");
-        String etaStr        = req.getParameter("eta_min");
-
-        // --- Validar que llegaron todos los datos ---
-        if (esVacio(origenLatStr) || esVacio(destinoLatStr) || esVacio(distanciaStr)) {
-            req.setAttribute("error", "Selecciona un origen y destino válidos en el mapa.");
-            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar-viaje.jsp")
-               .forward(req, res);
-            return;
-        }
-
         try {
-            double origenLat  = Double.parseDouble(origenLatStr);
-            double origenLng  = Double.parseDouble(origenLngStr);
-            double destinoLat = Double.parseDouble(destinoLatStr);
-            double destinoLng = Double.parseDouble(destinoLngStr);
-            double distanciaKm = Double.parseDouble(distanciaStr);
-            int    etaMin      = etaStr != null ? Integer.parseInt(etaStr) : 0;
+            int    uid          = (int) req.getSession().getAttribute("id");
+            double origenLat    = Double.parseDouble(req.getParameter("origenLat"));
+            double origenLng    = Double.parseDouble(req.getParameter("origenLng"));
+            String origenNombre = req.getParameter("origenNombre");
+            double destinoLat   = Double.parseDouble(req.getParameter("destinoLat"));
+            double destinoLng   = Double.parseDouble(req.getParameter("destinoLng"));
+            String destinoNombre= req.getParameter("destinoNombre");
+            double distanciaKm  = Double.parseDouble(req.getParameter("distanciaKm"));
+            int    duracionMin  = Integer.parseInt(req.getParameter("duracionMin"));
+            int    vehiculoId   = Integer.parseInt(req.getParameter("vehiculoId"));
 
-            // --- Calcular precio usando la tarifa activa ---
-            double precio = calcularPrecio(distanciaKm);
-
-            // --- Crear el objeto Viaje ---
-            Viaje viaje = new Viaje();
-            viaje.setIdUsuario((int) req.getSession().getAttribute("id"));
-            viaje.setOrigenLat(origenLat);
-            viaje.setOrigenLng(origenLng);
-            viaje.setOrigenDireccion(origenDir);
-            viaje.setDestinoLat(destinoLat);
-            viaje.setDestinoLng(destinoLng);
-            viaje.setDestinoDireccion(destinoDir);
-            viaje.setDistanciaKm(distanciaKm);
-            viaje.setPrecioTotal(precio);
-            viaje.setEtaViajeMin(etaMin);
-
-            // --- Insertar en BD ---
-            int idViaje = new ViajeDAO().insertar(viaje);
-
-            // --- Guardar ID en sesión para usarlo en el pago ---
-            req.getSession().setAttribute("id_viaje_pendiente", idViaje);
-
-            // --- Ir a la pantalla de pago ---
-            res.sendRedirect(req.getContextPath() + "/pasajero/pago?id=" + idViaje);
-
-        } catch (Exception e) {
-            req.setAttribute("error", "Error al procesar la solicitud: " + e.getMessage());
-            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar-viaje.jsp")
-               .forward(req, res);
-        }
-    }
-
-    /**
-     * Calcula el precio del viaje consultando la tarifa activa en la BD.
-     * Fórmula: tarifa_base + (distancia_km × costo_por_km) + cargo_servicio
-     */
-    private double calcularPrecio(double distanciaKm) throws Exception {
-        String sql = "SELECT tarifa_base, costo_por_km, cargo_servicio " +
-                     "FROM tarifas WHERE activa = 1 ORDER BY fecha_vigencia DESC LIMIT 1";
-        try (Connection conn = ConexionDB.obtener();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                double base    = rs.getDouble("tarifa_base");
-                double porKm   = rs.getDouble("costo_por_km");
-                double cargo   = rs.getDouble("cargo_servicio");
-                double total   = base + (distanciaKm * porKm) + cargo;
-                // Redondear a 2 decimales
-                return Math.round(total * 100.0) / 100.0;
+            if (vehiculoId <= 0) {
+                req.setAttribute("error", "Selecciona una unidad disponible para continuar.");
+                req.setAttribute("vehiculosB2C", VehiculoDAO.listarB2CDisponibles());
+                req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar.jsp").forward(req, res);
+                return;
             }
-            // Si no hay tarifa configurada, usar valores por defecto
-            return Math.round((15.0 + distanciaKm * 8.5 + 3.0) * 100.0) / 100.0;
-        }
-    }
 
-    private boolean esVacio(String v) {
-        return v == null || v.isBlank();
+            // Calcular costo con valores de configuracion (leídos del parámetro pasado por JS)
+            double costoBase   = Double.parseDouble(req.getParameter("costoBase"));
+            double costoPorKm  = Double.parseDouble(req.getParameter("costoPorKm"));
+            double costo       = costoBase + (distanciaKm * costoPorKm);
+
+            Viaje v = new Viaje();
+            v.setPasajeroId(uid);
+            v.setVehiculoId(vehiculoId);
+            v.setOrigenLat(origenLat);   v.setOrigenLng(origenLng);
+            v.setOrigenNombre(origenNombre);
+            v.setDestinoLat(destinoLat); v.setDestinoLng(destinoLng);
+            v.setDestinoNombre(destinoNombre);
+            v.setDistanciaKm(distanciaKm);
+            v.setDuracionMin(duracionMin);
+            v.setCosto(costo);
+            v.setMetodoPago(req.getParameter("metodoPago") != null
+                            ? req.getParameter("metodoPago") : "efectivo");
+
+            int viajeId = ViajeDAO.insertar(v);
+            req.getSession().setAttribute("viajeIdPendiente", viajeId);
+            res.sendRedirect(req.getContextPath() + "/pasajero/pago");
+        } catch (Exception e) {
+            req.setAttribute("error", "Error al crear el viaje: " + e.getMessage());
+            try { req.setAttribute("vehiculosB2C", VehiculoDAO.listarB2CDisponibles()); } catch (Exception ignored) {}
+            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/solicitar.jsp").forward(req, res);
+        }
     }
 }

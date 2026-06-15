@@ -6,7 +6,7 @@ import java.sql.DriverManager;
 import java.util.Properties;
 
 /**
- * ConexionDB — gestiona la conexión JDBC con MySQL.
+ * ConexionDB - gestiona la conexión JDBC con MySQL.
  *
  * Lee las credenciales desde db.properties (no están hardcodeadas
  * en el código fuente). Uso:
@@ -46,6 +46,6 @@ public class ConexionDB {
         return DriverManager.getConnection(URL, USUARIO, CONTRASENA);
     }
 
-    // Constructor privado — esta clase no se instancia
+    // Constructor privado - esta clase no se instancia
     private ConexionDB() {}
 }

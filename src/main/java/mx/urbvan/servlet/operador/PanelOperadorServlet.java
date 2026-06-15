@@ -1,144 +1,87 @@
 package mx.urbvan.servlet.operador;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
 import mx.urbvan.dao.ConexionDB;
 import mx.urbvan.dao.ViajeDAO;
 import mx.urbvan.modelo.Viaje;
-
 import java.io.IOException;
 import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * PanelOperadorServlet — carga el dashboard del operador.
- *
- * Expone al JSP:
- *  - datos del operador y vehículo asignado
- *  - estado de disponibilidad actual
- *  - viaje activo si existe
- *  - solicitud pendiente si existe
- *  - contadores de servicios
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/operador/PanelOperadorServlet.java
+ * PanelOperadorServlet - panel principal del operador con polling.
+ * CAMBIOS vs v1: consulta solicitudes_operador (tabla nueva) en lugar de
+ * buscar directamente en viajes. El operador ve las solicitudes pendientes
+ * asignadas a él, no todos los viajes en estado 'solicitado'.
  */
+@WebServlet("/operador/panel")
 public class PanelOperadorServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        int idOperador = (int) req.getSession().getAttribute("id");
-
-        try (Connection conn = ConexionDB.obtener()) {
-
-            // --- Datos del operador y vehículo ---
-            String sqlOp = """
-                SELECT o.nombre, o.apellido, o.correo, o.telefono,
-                       o.disponible, o.calificacion_prom,
-                       v.marca, v.modelo, v.placa, v.color, v.capacidad
-                FROM operadores o
-                LEFT JOIN vehiculos v ON v.id_vehiculo = o.id_vehiculo
-                WHERE o.id_operador = ?
-                """;
-            try (PreparedStatement ps = conn.prepareStatement(sqlOp)) {
-                ps.setInt(1, idOperador);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    req.setAttribute("op_nombre",    rs.getString("nombre"));
-                    req.setAttribute("op_apellido",  rs.getString("apellido"));
-                    req.setAttribute("op_correo",    rs.getString("correo"));
-                    req.setAttribute("op_telefono",  rs.getString("telefono"));
-                    req.setAttribute("op_disponible",rs.getInt("disponible"));
-                    req.setAttribute("op_calificacion", rs.getDouble("calificacion_prom"));
-                    req.setAttribute("veh_marca",    rs.getString("marca"));
-                    req.setAttribute("veh_modelo",   rs.getString("modelo"));
-                    req.setAttribute("veh_placa",    rs.getString("placa"));
-                    req.setAttribute("veh_color",    rs.getString("color"));
-                    req.setAttribute("veh_capacidad",rs.getInt("capacidad"));
-                }
+            throws IOException, jakarta.servlet.ServletException {
+        int uid = (int) req.getSession().getAttribute("id");
+        try {
+            // Si tiene viaje activo, redirigir a viaje-activo
+            Viaje activo = ViajeDAO.buscarActivoOperador(uid);
+            if (activo != null) {
+                req.setAttribute("viaje", activo);
+                req.getRequestDispatcher("/WEB-INF/vistas/operador/viaje-activo.jsp").forward(req, res);
+                return;
             }
-
-            // --- Viaje activo ---
-            Viaje viajeActivo = new ViajeDAO().buscarActivoPorOperador(idOperador);
-            req.setAttribute("viaje_activo", viajeActivo);
-
-            // --- Solicitud pendiente ---
-            if (viajeActivo == null) {
-                String sqlSol = """
-                    SELECT sa.id_solicitud, sa.id_viaje, sa.fecha_envio,
-                           v.origen_direccion, v.destino_direccion,
-                           v.precio_total, v.distancia_km, v.eta_viaje_min,
-                           CONCAT(u.nombre,' ',u.apellido) AS pasajero,
-                           u.telefono AS tel_pasajero
-                    FROM solicitudes_asignacion sa
-                    JOIN viajes   v ON v.id_viaje   = sa.id_viaje
-                    JOIN usuarios u ON u.id_usuario = v.id_usuario
-                    WHERE sa.id_operador = ? AND sa.estado = 'PENDIENTE'
-                    ORDER BY sa.fecha_envio DESC LIMIT 1
-                    """;
-                try (PreparedStatement ps = conn.prepareStatement(sqlSol)) {
-                    ps.setInt(1, idOperador);
-                    ResultSet rs = ps.executeQuery();
-                    if (rs.next()) {
-                        req.setAttribute("sol_id",       rs.getInt("id_solicitud"));
-                        req.setAttribute("sol_viaje_id", rs.getInt("id_viaje"));
-                        req.setAttribute("sol_origen",   rs.getString("origen_direccion"));
-                        req.setAttribute("sol_destino",  rs.getString("destino_direccion"));
-                        req.setAttribute("sol_precio",   rs.getDouble("precio_total"));
-                        req.setAttribute("sol_distancia",rs.getDouble("distancia_km"));
-                        req.setAttribute("sol_eta",      rs.getInt("eta_viaje_min"));
-                        req.setAttribute("sol_pasajero", rs.getString("pasajero"));
-                        req.setAttribute("sol_tel",      rs.getString("tel_pasajero"));
-                        req.setAttribute("sol_fecha",    rs.getTimestamp("fecha_envio"));
-                    }
-                }
-            }
-
-            // --- Contadores ---
-            String sqlCount = """
-                SELECT
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN estado='COMPLETADO' THEN 1 ELSE 0 END) AS completados,
-                    SUM(CASE WHEN estado='CANCELADO'  THEN 1 ELSE 0 END) AS cancelados
-                FROM viajes WHERE id_operador = ?
-                """;
-            try (PreparedStatement ps = conn.prepareStatement(sqlCount)) {
-                ps.setInt(1, idOperador);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    req.setAttribute("c_total",      rs.getInt("total"));
-                    req.setAttribute("c_completados",rs.getInt("completados"));
-                    req.setAttribute("c_cancelados", rs.getInt("cancelados"));
-                }
-            }
-
+            // Solicitudes pendientes asignadas a este operador
+            req.setAttribute("solicitudes", buscarSolicitudesPendientes(uid));
+            req.getRequestDispatcher("/WEB-INF/vistas/operador/panel.jsp").forward(req, res);
         } catch (Exception e) {
-            req.setAttribute("error_panel", "Error al cargar datos: " + e.getMessage());
+            req.setAttribute("error", "Error al cargar el panel.");
+            req.getRequestDispatcher("/WEB-INF/vistas/operador/panel.jsp").forward(req, res);
         }
-
-        req.getRequestDispatcher("/WEB-INF/vistas/operador/panel.jsp")
-           .forward(req, res);
     }
 
-    // POST — cambiar disponibilidad (toggle)
-    @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        int idOperador = (int) req.getSession().getAttribute("id");
-        String accion  = req.getParameter("accion");
-
-        if ("disponibilidad".equals(accion)) {
-            String valor = req.getParameter("disponible");
-            try (Connection conn = ConexionDB.obtener();
-                 PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE operadores SET disponible = ? WHERE id_operador = ?")) {
-                ps.setInt(1, "1".equals(valor) ? 1 : 0);
-                ps.setInt(2, idOperador);
-                ps.executeUpdate();
-            } catch (Exception e) { /* ignorar */ }
+    /** Devuelve los viajes cuya solicitud está pendiente para este operador. */
+    private List<Viaje> buscarSolicitudesPendientes(int operadorId) throws Exception {
+        String sql = """
+            SELECT v.id, v.pasajero_id, v.operador_id, v.vehiculo_id,
+                   v.origen_lat, v.origen_lng, v.origen_nombre,
+                   v.destino_lat, v.destino_lng, v.destino_nombre,
+                   v.distancia_km, v.duracion_min, v.costo, v.estado,
+                   v.metodo_pago, v.cancelado_por, v.created_at, v.updated_at,
+                   p.nombre AS pasajero_nombre,
+                   NULL AS operador_nombre, 0.0 AS operador_score,
+                   NULL AS vehiculo_modelo, NULL AS vehiculo_placa,
+                   NULL AS calificacion_dada
+            FROM   solicitudes_operador s
+            JOIN   viajes v    ON s.viaje_id    = v.id
+            JOIN   usuarios p  ON v.pasajero_id = p.id
+            WHERE  s.operador_id = ?
+              AND  s.estado      = 'pendiente'
+              AND  v.estado      = 'asignado'
+            ORDER BY s.created_at ASC
+            """;
+        List<Viaje> lista = new ArrayList<>();
+        try (Connection c = ConexionDB.obtener();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, operadorId);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                Viaje v = new Viaje();
+                v.setId(rs.getInt("id"));
+                v.setPasajeroId(rs.getInt("pasajero_id"));
+                v.setOrigenLat(rs.getDouble("origen_lat"));
+                v.setOrigenLng(rs.getDouble("origen_lng"));
+                v.setOrigenNombre(rs.getString("origen_nombre"));
+                v.setDestinoLat(rs.getDouble("destino_lat"));
+                v.setDestinoLng(rs.getDouble("destino_lng"));
+                v.setDestinoNombre(rs.getString("destino_nombre"));
+                v.setDistanciaKm(rs.getDouble("distancia_km"));
+                v.setCosto(rs.getDouble("costo"));
+                v.setEstado(Viaje.Estado.fromDb(rs.getString("estado")));
+                v.setPasajeroNombre(rs.getString("pasajero_nombre"));
+                lista.add(v);
+            }
         }
-
-        res.sendRedirect(req.getContextPath() + "/operador/panel");
+        return lista;
     }
 }

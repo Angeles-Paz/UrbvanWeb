@@ -1,0 +1,295 @@
+/* =============================================================
+   Urbvan UI — v3  ·  Light Theme  ·  Role-Variable System
+   Colores de rol: define --role / --role-dark / --role-light
+   en un bloque <style> dentro del <head> de cada JSP.
+   ============================================================= */
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  /* ACENTO DE ROL – se sobreescribe por grupo de páginas */
+  --role:#9D00FF;
+  --role-dark:#7B00CC;
+  --role-light:#F5EEFF;
+  --role-subtle:rgba(157,0,255,.1);
+
+  /* TEMA BASE – light */
+  --bg:#F5F6FA;
+  --surface:#FFFFFF;
+  --surface2:#F9FAFB;
+  --borde:#E5E7EB;
+  --borde-strong:#D1D5DB;
+
+  /* TIPOGRAFÍA */
+  --texto:#111827;
+  --texto2:#6B7280;
+  --texto3:#9CA3AF;
+
+  /* COLORES SEMÁNTICOS (fijos, no dependen del rol) */
+  --verde:#10b981;
+  --verde-dark:#059669;
+  --naranja:#f97316;
+  --naranja-dark:#ea580c;
+  --morado:#8b5cf6;
+  --morado-dark:#7c3aed;
+  --rojo:#ef4444;
+  --rojo-dark:#dc2626;
+  --amarillo:#f59e0b;
+}
+
+body{
+  font-family:'DM Sans',sans-serif;
+  background:var(--bg);
+  color:var(--texto);
+  min-height:100vh;
+}
+
+a{text-decoration:none;color:inherit}
+
+/* ── NAV ────────────────────────────────────────────────────── */
+.nav{
+  background:var(--surface);
+  border-bottom:3px solid var(--role);
+  padding:0 24px;
+  height:60px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  position:sticky;
+  top:0;
+  z-index:100;
+  box-shadow:0 2px 10px rgba(0,0,0,.06);
+}
+.nav-brand{font-size:20px;font-weight:700;color:var(--role)}
+
+/* Logo – reemplaza el <img> con tu PNG: assets/img/tu-logo.png */
+.nav-logo{
+  height:60px;width:170px;
+  display:flex;align-items:center;justify-content:flex-start;
+  overflow:hidden;flex-shrink:0;
+}
+.nav-logo img{
+  height:200px;width:200px;
+  display:block;object-fit:contain;
+  object-position:left center;
+  margin-left:-18px;
+}
+.nav-logo-img{
+  height:46px;width:auto;
+  display:block;object-fit:contain;
+}
+
+.nav-links{display:flex;gap:4px}
+.nav-links a{
+  color:var(--texto2);
+  text-decoration:none;
+  padding:7px 14px;
+  border-radius:8px;
+  font-size:14px;
+  font-weight:500;
+  transition:all .18s;
+}
+.nav-links a:hover,
+.nav-links a.activo{
+  background:var(--role-light);
+  color:var(--role);
+  font-weight:600;
+}
+.nav-links a.logout{color:var(--rojo)}
+.nav-links a.logout:hover{background:#FEF2F2;color:var(--rojo-dark)}
+
+/* ── LAYOUT ─────────────────────────────────────────────────── */
+.main{max-width:1100px;margin:0 auto;padding:32px 24px}
+.page-title{font-size:22px;font-weight:700;margin-bottom:8px;color:var(--texto)}
+.page-sub{color:var(--texto2);font-size:14px;margin-bottom:28px}
+
+/* ── CARDS ──────────────────────────────────────────────────── */
+.card{
+  background:var(--surface);
+  border:1px solid var(--borde);
+  border-radius:14px;
+  padding:24px;
+  box-shadow:0 1px 6px rgba(0,0,0,.04);
+}
+.card-title{font-size:16px;font-weight:600;margin-bottom:16px;color:var(--texto)}
+
+/* ── STAT CARDS ─────────────────────────────────────────────── */
+.grid-stats{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:16px;
+  margin-bottom:28px;
+}
+.stat-card{
+  background:var(--surface);
+  border:1px solid var(--borde);
+  border-top:3px solid var(--role);
+  border-radius:12px;
+  padding:20px;
+  text-align:center;
+  box-shadow:0 1px 6px rgba(0,0,0,.04);
+}
+.stat-num{font-size:32px;font-weight:700;margin-bottom:4px;color:var(--role)}
+.stat-label{color:var(--texto2);font-size:13px}
+
+/* ── BADGES ─────────────────────────────────────────────────── */
+.badge{
+  display:inline-flex;align-items:center;
+  padding:4px 10px;border-radius:20px;
+  font-size:12px;font-weight:600;
+}
+.badge-verde{background:#D1FAE5;color:#065F46}
+.badge-naranja{background:#FFEDD5;color:#9A3412}
+.badge-rojo{background:#FEE2E2;color:#991B1B}
+.badge-morado{background:#EDE9FE;color:#4C1D95}
+.badge-gris{background:#F3F4F6;color:#374151}
+.badge-azul{background:#DBEAFE;color:#1E40AF}
+.badge-role{background:var(--role-light);color:var(--role)}
+
+/* ── TABLES ─────────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse}
+th{
+  text-align:left;
+  padding:10px 16px;
+  color:var(--texto2);
+  font-size:12px;font-weight:700;
+  letter-spacing:.4px;text-transform:uppercase;
+  border-bottom:2px solid var(--borde);
+  background:var(--surface2);
+}
+td{
+  padding:13px 16px;
+  border-bottom:1px solid var(--borde);
+  font-size:14px;vertical-align:middle;
+  color:var(--texto);
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+
+/* ── BUTTONS ────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:10px 20px;border-radius:10px;
+  font-size:14px;font-weight:600;
+  font-family:'DM Sans',sans-serif;
+  border:none;cursor:pointer;
+  text-decoration:none;transition:all .18s;
+}
+
+/* Botón primario del rol */
+.btn-primary{background:var(--role);color:#fff}
+.btn-primary:hover{
+  background:var(--role-dark);
+  transform:translateY(-1px);
+  box-shadow:0 4px 14px var(--role-subtle);
+}
+
+/* Botones semánticos (estado, acciones específicas) */
+.btn-verde{background:var(--verde);color:#fff}
+.btn-verde:hover{background:var(--verde-dark)}
+.btn-naranja{background:var(--naranja);color:#fff}
+.btn-naranja:hover{background:var(--naranja-dark)}
+.btn-morado{background:var(--morado);color:#fff}
+.btn-morado:hover{background:var(--morado-dark)}
+
+/* Ghost / outline */
+.btn-ghost{
+  background:var(--surface2);
+  color:var(--texto2);
+  border:1px solid var(--borde);
+}
+.btn-ghost:hover{background:var(--borde);color:var(--texto)}
+
+.btn-outline-role{
+  background:transparent;
+  color:var(--role);
+  border:1.5px solid var(--role);
+}
+.btn-outline-role:hover{background:var(--role-light)}
+
+.btn-danger{background:var(--rojo);color:#fff}
+.btn-danger:hover{background:var(--rojo-dark)}
+
+.btn-sm{padding:6px 14px;font-size:13px}
+
+/* ── FORMS ──────────────────────────────────────────────────── */
+input,select,textarea{
+  width:100%;
+  padding:11px 14px;
+  background:var(--surface);
+  border:1.5px solid var(--borde);
+  border-radius:10px;
+  color:var(--texto);
+  font-size:14px;
+  font-family:'DM Sans',sans-serif;
+  outline:none;
+  transition:border-color .18s,box-shadow .18s;
+}
+input:focus,select:focus,textarea:focus{
+  border-color:var(--role);
+  box-shadow:0 0 0 3px var(--role-subtle);
+}
+select option{background:var(--surface)}
+.form-group{margin-bottom:18px}
+.form-label{
+  display:block;color:var(--texto2);
+  font-size:13px;font-weight:600;
+  margin-bottom:6px;letter-spacing:.2px;
+}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
+@media(max-width:640px){.form-grid{grid-template-columns:1fr}}
+
+/* ── ALERTAS ────────────────────────────────────────────────── */
+.alerta-error{
+  background:#FEF2F2;color:#DC2626;
+  border-radius:8px;padding:12px 16px;
+  font-size:14px;margin-bottom:16px;
+  border-left:4px solid #DC2626;
+}
+.alerta-ok{
+  background:#ECFDF5;color:#065F46;
+  border-radius:8px;padding:12px 16px;
+  font-size:14px;margin-bottom:16px;
+  border-left:4px solid #10B981;
+}
+.alerta-info{
+  background:var(--role-light);color:var(--role-dark);
+  border-radius:8px;padding:12px 16px;
+  font-size:14px;margin-bottom:16px;
+  border-left:4px solid var(--role);
+}
+
+/* ── MISC ───────────────────────────────────────────────────── */
+.score{display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.score::before{content:'★';color:#F59E0B}
+.empty{text-align:center;padding:40px;color:var(--texto3)}
+
+/* ── MODAL OVERLAY ──────────────────────────────────────────── */
+.modal-overlay{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,.4);z-index:200;
+  align-items:center;justify-content:center;
+}
+.modal-overlay.visible{display:flex}
+.modal{
+  background:var(--surface);
+  border-radius:16px;padding:28px;
+  max-width:400px;width:90%;
+  box-shadow:0 20px 60px rgba(0,0,0,.15);
+}
+
+/* ── TABS ───────────────────────────────────────────────────── */
+.tab-header{
+  display:flex;gap:4px;margin-bottom:16px;
+  border-bottom:2px solid var(--borde);
+}
+.tab-btn{
+  padding:10px 18px;background:none;border:none;
+  border-bottom:2px solid transparent;
+  font-family:'DM Sans',sans-serif;font-size:14px;
+  font-weight:500;color:var(--texto2);
+  cursor:pointer;margin-bottom:-2px;transition:color .18s;
+}
+.tab-btn.activo{color:var(--role);border-bottom-color:var(--role)}
+.tab-content{display:none}
+.tab-content.activo{display:block}

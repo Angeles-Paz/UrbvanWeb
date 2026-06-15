@@ -1,216 +1,203 @@
-// ============================================================
-//  seguimiento.js — polling y mapa de seguimiento del viaje
-//  Ubicación: src/main/webapp/assets/js/seguimiento.js
-// ============================================================
-
-var mapa, marcadorPasajero, marcadorOperador, lineaRuta;
-var intervalPolling = null;
-var ultimoEstado = null;
-
-// Inyectados desde el JSP
-// AZURE_KEY, CTX_PATH, ID_VIAJE, ORIGEN_LAT, ORIGEN_LNG, DESTINO_LAT, DESTINO_LNG
+/**
+ * seguimiento.js - Urbvan v3.1
+ * Tracking B2C/B2B con Azure Maps.
+ * - Dibuja la ruta completa del viaje.
+ * - Muestra la ubicación actual del operador.
+ * - Dibuja en naranja el tramo que el operador debe seguir desde su ubicación actual
+ *   hasta el siguiente punto de la ruta.
+ */
+'use strict';
 
 window.addEventListener('load', function () {
-    iniciarMapa();
-    iniciarPolling();
+    if (typeof AZURE_KEY === 'undefined' || !AZURE_KEY || AZURE_KEY === 'null') {
+        console.warn('[seguimiento.js] AZURE_KEY no definida.');
+        return;
+    }
+
+    const mapaId = document.getElementById('mapa') ? 'mapa'
+                : (document.getElementById('mapa-seguimiento') ? 'mapa-seguimiento' : null);
+    if (!mapaId) {
+        console.warn('[seguimiento.js] No existe contenedor de mapa.');
+        return;
+    }
+
+    const origen = obtenerOrigen();
+    const destino = obtenerDestino();
+    if (!origen || !destino) {
+        console.warn('[seguimiento.js] Coordenadas de origen/destino no definidas.');
+        return;
+    }
+
+    let estadoActual = (typeof ESTADO_VIAJE_INICIAL !== 'undefined' && ESTADO_VIAJE_INICIAL)
+        ? String(ESTADO_VIAJE_INICIAL)
+        : '';
+
+    const mapa = new atlas.Map(mapaId, {
+        center: origen,
+        zoom: 12,
+        language: 'es-MX',
+        style: 'road',
+        authOptions: { authType: 'subscriptionKey', subscriptionKey: AZURE_KEY }
+    });
+
+    mapa.events.add('ready', async function () {
+        const dsPuntos = new atlas.source.DataSource();
+        const dsRutaCompleta = new atlas.source.DataSource();
+        const dsRutaOperador = new atlas.source.DataSource();
+        const dsOperador = new atlas.source.DataSource();
+        const dsSiguiente = new atlas.source.DataSource();
+        mapa.sources.add([dsRutaCompleta, dsRutaOperador, dsPuntos, dsOperador, dsSiguiente]);
+
+        mapa.layers.add(new atlas.layer.LineLayer(dsRutaCompleta, null, {
+            strokeColor: '#10b981', strokeWidth: 4, lineCap: 'round', lineJoin: 'round'
+        }));
+        mapa.layers.add(new atlas.layer.LineLayer(dsRutaOperador, null, {
+            strokeColor: '#f97316', strokeWidth: 5, lineCap: 'round', lineJoin: 'round'
+        }));
+        mapa.layers.add(new atlas.layer.BubbleLayer(dsPuntos, null, {
+            color: ['match', ['get', 'tipo'], 'origen', '#10b981', 'destino', '#ef4444', '#94a3b8'],
+            radius: 10,
+            strokeColor: '#ffffff', strokeWidth: 3
+        }));
+        mapa.layers.add(new atlas.layer.BubbleLayer(dsSiguiente, null, {
+            color: '#06b6d4', radius: 12, strokeColor: '#ffffff', strokeWidth: 3
+        }));
+        mapa.layers.add(new atlas.layer.BubbleLayer(dsOperador, null, {
+            color: '#f97316', radius: 13, strokeColor: '#ffffff', strokeWidth: 3
+        }));
+
+        dsPuntos.add([
+            new atlas.data.Feature(new atlas.data.Point(origen), { tipo: 'origen' }),
+            new atlas.data.Feature(new atlas.data.Point(destino), { tipo: 'destino' })
+        ]);
+
+        await dibujarRutaEntrePuntos(dsRutaCompleta, [origen, destino]);
+
+        function pintarOperador(lat, lng) {
+            if (lat === null || lng === null || lat === undefined || lng === undefined || lat === 0 || lng === 0) return null;
+            const punto = [parseFloat(lng), parseFloat(lat)];
+            if (isNaN(punto[0]) || isNaN(punto[1])) return null;
+            dsOperador.clear();
+            dsOperador.add(new atlas.data.Feature(new atlas.data.Point(punto), { tipo: 'operador' }));
+            return punto;
+        }
+
+        function siguientePuntoB2C() {
+            const e = estadoActual.toUpperCase();
+            if (e === 'EN_CAMINO' || e === 'EN_CURSO' || e === 'En camino al destino'.toUpperCase()) {
+                return destino;
+            }
+            return origen;
+        }
+
+        async function actualizarRutaOperador(posOperador) {
+            if (!posOperador) return;
+            const siguiente = siguientePuntoB2C();
+            dsSiguiente.clear();
+            dsSiguiente.add(new atlas.data.Feature(new atlas.data.Point(siguiente), { tipo: 'siguiente' }));
+            await dibujarRutaEntrePuntos(dsRutaOperador, [posOperador, siguiente], true);
+            ajustarCamara(mapa, [posOperador, origen, destino]);
+        }
+
+        if (typeof OPERADOR_LAT !== 'undefined' && typeof OPERADOR_LNG !== 'undefined') {
+            const pos = pintarOperador(OPERADOR_LAT, OPERADOR_LNG);
+            actualizarRutaOperador(pos);
+        }
+
+        function refrescarGpsLocalOperador() {
+            if (typeof MODO_OPERADOR === 'undefined' || !MODO_OPERADOR || !navigator.geolocation) return;
+            navigator.geolocation.getCurrentPosition(function(pos) {
+                const punto = pintarOperador(pos.coords.latitude, pos.coords.longitude);
+                actualizarRutaOperador(punto);
+            }, function(){}, { enableHighAccuracy: true, timeout: 4000 });
+        }
+        refrescarGpsLocalOperador();
+        setInterval(refrescarGpsLocalOperador, 5000);
+
+        async function refrescarTracking() {
+            if (typeof TRACKING_URL === 'undefined' || !TRACKING_URL) return;
+            try {
+                const res = await fetch(TRACKING_URL, { cache: 'no-store' });
+                const data = await res.json();
+                if (data && data.activo === false) return;
+
+                if (data.estado) {
+                    estadoActual = data.estado;
+                    actualizarEstadoVisual(data.estado);
+                }
+
+                const pos = pintarOperador(data.lat, data.lng);
+                await actualizarRutaOperador(pos);
+            } catch (e) {
+                console.warn('[seguimiento.js] No se pudo refrescar tracking:', e);
+            }
+        }
+
+        refrescarTracking();
+        setInterval(refrescarTracking, 5000);
+        ajustarCamara(mapa, [origen, destino]);
+    });
 });
 
-// ── Inicializar mapa ───────────────────────────────────────
-function iniciarMapa() {
-    mapa = new atlas.Map('mapa-seguimiento', {
-        center: [ORIGEN_LNG, ORIGEN_LAT],
-        zoom: 13,
-        language: 'es-MX',
-        authOptions: {
-            authType: 'subscriptionKey',
-            subscriptionKey: AZURE_KEY
-        }
-    });
-
-    mapa.events.add('ready', function () {
-        // Marcador del pasajero (origen)
-        marcadorPasajero = new atlas.HtmlMarker({
-            color: '#1D9E75',
-            position: [ORIGEN_LNG, ORIGEN_LAT],
-            text: 'P'
-        });
-        mapa.markers.add(marcadorPasajero);
-
-        // Marcador del destino
-        var marcadorDestino = new atlas.HtmlMarker({
-            color: '#D85A30',
-            position: [DESTINO_LNG, DESTINO_LAT]
-        });
-        mapa.markers.add(marcadorDestino);
-    });
+function obtenerOrigen() {
+    if (typeof VIAJE_ORIGEN !== 'undefined') return VIAJE_ORIGEN;
+    if (typeof ORIGEN_LNG !== 'undefined' && typeof ORIGEN_LAT !== 'undefined') return [ORIGEN_LNG, ORIGEN_LAT];
+    return null;
 }
 
-// ── Polling — consulta el estado cada 5 segundos ──────────
-function iniciarPolling() {
-    consultarEstado();
-    intervalPolling = setInterval(consultarEstado, 5000);
+function obtenerDestino() {
+    if (typeof VIAJE_DESTINO !== 'undefined') return VIAJE_DESTINO;
+    if (typeof DESTINO_LNG !== 'undefined' && typeof DESTINO_LAT !== 'undefined') return [DESTINO_LNG, DESTINO_LAT];
+    return null;
 }
 
-function consultarEstado() {
-    fetch(CTX_PATH + '/pasajero/estado-viaje', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'id_viaje=' + ID_VIAJE
-    })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-        if (data.error) return;
-        procesarEstado(data);
-    })
-    .catch(function () {
-        // Error de red — reintentará en el siguiente ciclo
+async function dibujarRutaEntrePuntos(ds, puntos, limpiar) {
+    try {
+        if (limpiar) ds.clear();
+        if (!puntos || puntos.length < 2) return;
+        const query = puntos.map(function (p) { return p[1] + ',' + p[0]; }).join(':');
+        const url = 'https://atlas.microsoft.com/route/directions/json'
+            + '?api-version=1.0&subscription-key=' + AZURE_KEY
+            + '&query=' + query
+            + '&routeType=fastest&traffic=true&language=es-MX';
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.routes || !data.routes.length) return;
+        const coords = [];
+        data.routes[0].legs.forEach(function (leg) {
+            leg.points.forEach(function (p) { coords.push([p.longitude, p.latitude]); });
+        });
+        if (limpiar) ds.clear();
+        ds.add(new atlas.data.Feature(new atlas.data.LineString(coords)));
+    } catch (e) {
+        console.error('[seguimiento.js] Error al dibujar ruta:', e);
+    }
+}
+
+function ajustarCamara(mapa, puntos) {
+    const validos = (puntos || []).filter(function (p) {
+        return p && typeof p[0] === 'number' && typeof p[1] === 'number' && !isNaN(p[0]) && !isNaN(p[1]);
+    });
+    if (!validos.length) return;
+    mapa.setCamera({
+        bounds: atlas.data.BoundingBox.fromPositions(validos),
+        padding: 80
     });
 }
 
-// ── Procesar respuesta del servidor ───────────────────────
-function procesarEstado(data) {
-    var estado = data.estado;
-
-    // Actualizar ETA si cambió
-    actualizarETA(data.eta_operador, data.eta_viaje, estado);
-
-    // Actualizar marcador del operador si tiene posición
-    if (data.op_lat && data.op_lng && data.op_lat !== 0) {
-        actualizarMarcadorOperador(data.op_lat, data.op_lng);
-
-        // Dibujar ruta del operador al pasajero si está en camino
-        if (estado === 'ACEPTADO' || estado === 'OPERADOR_EN_CAMINO') {
-            dibujarRutaOperador(data.op_lat, data.op_lng, ORIGEN_LAT, ORIGEN_LNG);
+function actualizarEstadoVisual(estado) {
+    const estadoTexto = document.getElementById('estado-texto');
+    const estadoDesc = document.getElementById('estado-desc');
+    const etaSub = document.getElementById('eta-sub');
+    if (!estadoTexto) return;
+    estadoTexto.textContent = estado;
+    if (etaSub) etaSub.textContent = estado;
+    if (estadoDesc) {
+        const e = String(estado).toLowerCase();
+        if (e.indexOf('destino') >= 0 || e.indexOf('curso') >= 0 || e.indexOf('camino') >= 0) {
+            estadoDesc.textContent = 'El operador avanza hacia el siguiente punto marcado en el mapa.';
+        } else {
+            estadoDesc.textContent = 'El operador se dirige hacia tu punto de origen.';
         }
-
-        // Dibujar ruta del viaje si ya inició
-        if (estado === 'VIAJE_INICIADO') {
-            dibujarRutaViaje(data.op_lat, data.op_lng, DESTINO_LAT, DESTINO_LNG);
-        }
-    }
-
-    // Actualizar UI según el estado
-    if (estado !== ultimoEstado) {
-        ultimoEstado = estado;
-        actualizarUI(estado, data);
-    }
-
-    // Si el viaje terminó, detener el polling
-    if (estado === 'COMPLETADO' || estado === 'CANCELADO') {
-        clearInterval(intervalPolling);
-        if (estado === 'COMPLETADO') {
-            setTimeout(function () {
-                window.location.href = CTX_PATH + '/pasajero/dashboard?viaje=completado';
-            }, 3000);
-        }
-    }
-}
-
-// ── Actualizar marcador del operador ──────────────────────
-function actualizarMarcadorOperador(lat, lng) {
-    if (!mapa) return;
-    var pos = [lng, lat];
-    if (!marcadorOperador) {
-        marcadorOperador = new atlas.HtmlMarker({
-            color: '#534AB7',
-            position: pos,
-            text: 'O'
-        });
-        mapa.markers.add(marcadorOperador);
-    } else {
-        marcadorOperador.setOptions({ position: pos });
-    }
-}
-
-// ── Dibujar ruta en el mapa ────────────────────────────────
-function dibujarRuta(origenLat, origenLng, destinoLat, destinoLng, color, idCapa) {
-    var url = 'https://atlas.microsoft.com/route/directions/json' +
-        '?api-version=1.0' +
-        '&query=' + origenLat + ',' + origenLng + ':' + destinoLat + ',' + destinoLng +
-        '&travelMode=car&subscription-key=' + AZURE_KEY;
-
-    fetch(url)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (!data.routes || !data.routes[0]) return;
-            var puntos = data.routes[0].legs[0].points;
-            var coords = puntos.map(function (p) { return [p.longitude, p.latitude]; });
-
-            // Limpiar capa anterior si existe
-            try { mapa.layers.remove(idCapa + '-layer'); } catch(e) {}
-            try { mapa.sources.remove(idCapa + '-source'); } catch(e) {}
-
-            var source = new atlas.source.DataSource(idCapa + '-source');
-            mapa.sources.add(source);
-            source.add(new atlas.data.LineString(coords));
-
-            mapa.layers.add(new atlas.layer.LineLayer(source, idCapa + '-layer', {
-                strokeColor: color,
-                strokeWidth: 3,
-                strokeDashArray: idCapa === 'op' ? [2, 2] : [1]
-            }));
-        });
-}
-
-function dibujarRutaOperador(opLat, opLng, pasLat, pasLng) {
-    dibujarRuta(opLat, opLng, pasLat, pasLng, '#534AB7', 'op');
-}
-
-function dibujarRutaViaje(opLat, opLng, destLat, destLng) {
-    dibujarRuta(opLat, opLng, destLat, destLng, '#1D9E75', 'viaje');
-}
-
-// ── Actualizar ETA en el panel ────────────────────────────
-function actualizarETA(etaOp, etaViaje, estado) {
-    var elEta = document.getElementById('eta-valor');
-    var elSub = document.getElementById('eta-sub');
-    if (!elEta) return;
-
-    if (estado === 'EN_ASIGNACION') {
-        elEta.textContent = '...';
-        elSub.textContent = 'Buscando operador';
-    } else if (estado === 'ACEPTADO' || estado === 'OPERADOR_EN_CAMINO') {
-        elEta.textContent = (etaOp || '—') + ' min';
-        elSub.textContent = 'El operador llega en';
-    } else if (estado === 'VIAJE_INICIADO') {
-        elEta.textContent = (etaViaje || '—') + ' min';
-        elSub.textContent = 'Tiempo al destino';
-    } else if (estado === 'COMPLETADO') {
-        elEta.textContent = '¡Llegaste!';
-        elSub.textContent = 'Viaje completado';
-    }
-}
-
-// ── Actualizar la UI según el estado del viaje ────────────
-function actualizarUI(estado, data) {
-    var steps = document.querySelectorAll('.timeline-step');
-    var estadoTexto = document.getElementById('estado-texto');
-    var estadoDesc  = document.getElementById('estado-desc');
-
-    var configs = {
-        'EN_ASIGNACION':    { paso: 0, texto: 'Buscando operador',      desc: 'Estamos asignando el operador más cercano a tu ubicación.' },
-        'ACEPTADO':         { paso: 1, texto: 'Operador asignado',       desc: 'Tu operador ha aceptado el viaje y se dirige hacia ti.' },
-        'OPERADOR_EN_CAMINO': { paso: 1, texto: 'Operador en camino',    desc: 'Tu operador está en camino. Prepárate para abordar.' },
-        'VIAJE_INICIADO':   { paso: 2, texto: 'Viaje en curso',          desc: 'Estás en camino a tu destino. ¡Buen viaje!' },
-        'COMPLETADO':       { paso: 3, texto: '¡Viaje completado!',      desc: 'Has llegado a tu destino. Gracias por viajar con Urbvan.' },
-        'CANCELADO':        { paso: 0, texto: 'Viaje cancelado',         desc: 'El viaje fue cancelado.' }
-    };
-
-    var cfg = configs[estado] || configs['EN_ASIGNACION'];
-
-    if (estadoTexto) estadoTexto.textContent = cfg.texto;
-    if (estadoDesc)  estadoDesc.textContent  = cfg.desc;
-
-    // Marcar pasos completados en la línea de tiempo
-    steps.forEach(function (step, i) {
-        step.classList.remove('activo', 'hecho');
-        if (i < cfg.paso) step.classList.add('hecho');
-        if (i === cfg.paso) step.classList.add('activo');
-    });
-
-    // Mostrar botón de calificar si está completado
-    if (estado === 'COMPLETADO') {
-        var btnCal = document.getElementById('btn-calificar');
-        if (btnCal) btnCal.style.display = 'block';
     }
 }

@@ -1,133 +1,122 @@
 package mx.urbvan.servlet.admin;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
 import mx.urbvan.dao.ConexionDB;
-
-import java.io.IOException;
+import mx.urbvan.modelo.Vehiculo;
+import java.io.*;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
- * GestionVehiculosServlet — CRUD de vehículos para el administrador.
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/admin/GestionVehiculosServlet.java
+ * GestionVehiculosServlet - CRUD de vehículos para el admin.
+ * CAMBIOS vs v1: nuevo campo 'categoria' (b2c|b2b) en INSERT y SELECT.
  */
+@WebServlet("/admin/vehiculos")
 public class GestionVehiculosServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        try (Connection conn = ConexionDB.obtener()) {
-
-            String sql = """
-                SELECT v.id_vehiculo, v.placa, v.marca, v.modelo,
-                       v.anio, v.color, v.capacidad, v.activo,
-                       CONCAT(o.nombre,' ',o.apellido) AS operador_asignado
-                FROM vehiculos v
-                LEFT JOIN operadores o ON o.id_vehiculo = v.id_vehiculo AND o.activo = 1
-                ORDER BY v.marca, v.modelo
-                """;
-
-            List<Object[]> vehiculos = new ArrayList<>();
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ResultSet rs = ps.executeQuery();
-                while (rs.next()) {
-                    vehiculos.add(new Object[]{
-                        rs.getInt("id_vehiculo"),
-                        rs.getString("placa"),
-                        rs.getString("marca"),
-                        rs.getString("modelo"),
-                        rs.getInt("anio"),
-                        rs.getString("color"),
-                        rs.getInt("capacidad"),
-                        rs.getInt("activo"),
-                        rs.getString("operador_asignado")
-                    });
-                }
-            }
-            req.setAttribute("vehiculos", vehiculos);
-
+            throws IOException, jakarta.servlet.ServletException {
+        try (Connection c = ConexionDB.obtener()) {
+            req.setAttribute("vehiculos", listarVehiculos(c));
+            req.setAttribute("operadoresDisponibles", listarOperadoresSinVehiculo(c));
+            req.getRequestDispatcher("/WEB-INF/vistas/admin/vehiculos.jsp").forward(req, res);
         } catch (Exception e) {
-            req.setAttribute("error", "Error al cargar vehículos: " + e.getMessage());
+            req.setAttribute("error", "Error al cargar vehículos.");
+            req.getRequestDispatcher("/WEB-INF/vistas/admin/vehiculos.jsp").forward(req, res);
         }
-
-        req.getRequestDispatcher("/WEB-INF/vistas/admin/vehiculos.jsp").forward(req, res);
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
+            throws IOException, jakarta.servlet.ServletException {
         req.setCharacterEncoding("UTF-8");
         String accion = req.getParameter("accion");
-
-        try (Connection conn = ConexionDB.obtener()) {
-
+        try (Connection c = ConexionDB.obtener()) {
             switch (accion != null ? accion : "") {
-
-                case "crear" -> {
-                    String placa     = req.getParameter("placa");
-                    String marca     = req.getParameter("marca");
-                    String modelo    = req.getParameter("modelo");
-                    String anio      = req.getParameter("anio");
-                    String color     = req.getParameter("color");
-                    String capacidad = req.getParameter("capacidad");
-
-                    if (placa == null || marca == null || modelo == null) break;
-
-                    String sql = """
-                        INSERT INTO vehiculos (placa, marca, modelo, anio, color, capacidad)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """;
-                    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                        ps.setString(1, placa.trim().toUpperCase());
-                        ps.setString(2, marca.trim());
-                        ps.setString(3, modelo.trim());
-                        ps.setInt(4,    anio != null ? Integer.parseInt(anio) : 2024);
-                        ps.setString(5, color);
-                        ps.setInt(6,    capacidad != null ? Integer.parseInt(capacidad) : 4);
-                        ps.executeUpdate();
-                    }
-                }
-
-                case "editar" -> {
-                    int    id       = Integer.parseInt(req.getParameter("id"));
-                    String marca    = req.getParameter("marca");
-                    String modelo   = req.getParameter("modelo");
-                    String color    = req.getParameter("color");
-                    String cap      = req.getParameter("capacidad");
-
-                    try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE vehiculos SET marca=?, modelo=?, color=?, capacidad=? " +
-                        "WHERE id_vehiculo=?")) {
-                        ps.setString(1, marca);
-                        ps.setString(2, modelo);
-                        ps.setString(3, color);
-                        ps.setInt(4,    cap != null ? Integer.parseInt(cap) : 4);
-                        ps.setInt(5,    id);
-                        ps.executeUpdate();
-                    }
-                }
-
-                case "toggle_activo" -> {
-                    int id    = Integer.parseInt(req.getParameter("id"));
-                    int valor = Integer.parseInt(req.getParameter("activo"));
-                    try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE vehiculos SET activo = ? WHERE id_vehiculo = ?")) {
-                        ps.setInt(1, valor == 1 ? 0 : 1);
-                        ps.setInt(2, id);
-                        ps.executeUpdate();
-                    }
-                }
+                case "crear"        -> crearVehiculo(c, req);
+                case "asignar"      -> asignarOperador(c, req);
+                case "toggleActivo" -> toggleActivo(c, Integer.parseInt(req.getParameter("id")));
             }
-
         } catch (Exception e) {
-            // Continuar
+            req.setAttribute("error", "Error: " + e.getMessage());
         }
-
         res.sendRedirect(req.getContextPath() + "/admin/vehiculos");
+    }
+
+    private List<Vehiculo> listarVehiculos(Connection c) throws SQLException {
+        String sql = """
+            SELECT v.id, v.modelo, v.capacidad, v.placa, v.color,
+                   v.operador_id, v.categoria, v.activo,
+                   u.nombre AS operador_nombre
+            FROM   vehiculos v
+            LEFT JOIN usuarios u ON v.operador_id = u.id
+            ORDER BY v.categoria, v.modelo
+            """;
+        List<Vehiculo> lista = new ArrayList<>();
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                Vehiculo vh = new Vehiculo();
+                vh.setId(rs.getInt("id"));
+                vh.setModelo(rs.getString("modelo"));
+                vh.setCapacidad(rs.getInt("capacidad"));
+                vh.setPlaca(rs.getString("placa"));
+                vh.setColor(rs.getString("color"));
+                int opId = rs.getInt("operador_id");
+                vh.setOperadorId(rs.wasNull() ? null : opId);
+                vh.setCategoria(rs.getString("categoria"));
+                vh.setActivo(rs.getBoolean("activo"));
+                vh.setOperadorNombre(rs.getString("operador_nombre"));
+                lista.add(vh);
+            }
+        }
+        return lista;
+    }
+    private void crearVehiculo(Connection c, HttpServletRequest req) throws SQLException {
+        String sql = """
+            INSERT INTO vehiculos (modelo, capacidad, placa, color, categoria, activo)
+            VALUES (?,?,?,?,?,TRUE)
+            """;
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, req.getParameter("modelo"));
+            ps.setInt(2, Integer.parseInt(req.getParameter("capacidad")));
+            ps.setString(3, req.getParameter("placa"));
+            ps.setString(4, req.getParameter("color"));
+            ps.setString(5, req.getParameter("categoria")); // 'b2c' | 'b2b'
+            ps.executeUpdate();
+        }
+    }
+    private void asignarOperador(Connection c, HttpServletRequest req) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE vehiculos SET operador_id=? WHERE id=?")) {
+            ps.setInt(1, Integer.parseInt(req.getParameter("operadorId")));
+            ps.setInt(2, Integer.parseInt(req.getParameter("vehiculoId")));
+            ps.executeUpdate();
+        }
+    }
+    private void toggleActivo(Connection c, int id) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE vehiculos SET activo = NOT activo WHERE id=?")) {
+            ps.setInt(1, id); ps.executeUpdate();
+        }
+    }
+    private List<Map<String,Object>> listarOperadoresSinVehiculo(Connection c) throws SQLException {
+        String sql = """
+            SELECT u.id, u.nombre FROM usuarios u
+            WHERE u.rol = 'operador' AND u.activo = TRUE
+              AND u.id NOT IN (SELECT operador_id FROM vehiculos WHERE operador_id IS NOT NULL AND activo=TRUE)
+            ORDER BY u.nombre
+            """;
+        List<Map<String,Object>> lista = new ArrayList<>();
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                Map<String,Object> m = new HashMap<>();
+                m.put("id", rs.getInt("id"));
+                m.put("nombre", rs.getString("nombre"));
+                lista.add(m);
+            }
+        }
+        return lista;
     }
 }

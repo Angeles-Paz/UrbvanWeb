@@ -1,195 +1,233 @@
 <%@ page contentType="text/html;charset=UTF-8" language="java" %>
-<%@ page import="java.util.List" %>
+<%@ taglib prefix="c" uri="jakarta.tags.core" %>
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Urbvan Admin — Vehículos</title>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Urbvan - Vehículos</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="${pageContext.request.contextPath}/assets/css/urbvan.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        :root {
-            --coral: #993C1D; --coral-dark: #712B13; --coral-light: #FAECE7;
-            --verde: #1D9E75; --verde-light: #E1F5EE;
-            --texto: #1a1a1a; --texto-2: #5a5a5a; --texto-3: #9a9a9a;
-            --borde: #e4e4e4; --fondo: #f7f7f5; --blanco: #ffffff;
-            --error: #D85A30; --error-bg: #FAECE7;
-        }
-        body { font-family: 'DM Sans', sans-serif; background: var(--fondo); min-height: 100vh; }
-        nav { background: var(--coral-dark); height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: sticky; top: 0; z-index: 10; }
-        .nav-marca { display: flex; align-items: center; gap: 10px; }
-        .nav-logo  { font-size: 18px; font-weight: 600; color: white; }
-        .nav-badge { font-size: 11px; background: rgba(255,255,255,.15); color: white; padding: 3px 10px; border-radius: 20px; }
-        .nav-links { display: flex; align-items: center; gap: 4px; }
-        .nav-link  { font-size: 13px; color: rgba(255,255,255,.7); text-decoration: none; padding: 6px 14px; border-radius: 20px; }
-        .nav-link:hover { background: rgba(255,255,255,.1); color: white; }
-        .nav-link.activo { background: rgba(255,255,255,.15); color: white; font-weight: 500; }
-        .btn-logout { font-size: 12px; color: rgba(255,255,255,.6); text-decoration: none; padding: 5px 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 20px; margin-left: 8px; }
-
-        .contenedor { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
-        .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-        .page-titulo { font-size: 22px; font-weight: 600; color: var(--texto); }
-        .page-sub    { font-size: 13px; color: var(--texto-2); margin-top: 3px; }
-        .btn-nuevo   { padding: 10px 20px; background: var(--coral-dark); color: white; border: none; border-radius: 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; }
-
-        /* Grid de tarjetas */
-        .veh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 14px; }
-        .veh-card { background: var(--blanco); border: 1px solid var(--borde); border-radius: 14px; overflow: hidden; }
-        .veh-card-header {
-            padding: 16px 18px; display: flex; align-items: center;
-            gap: 12px; border-bottom: 1px solid var(--borde);
-        }
-        .veh-icono {
-            width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
-            background: var(--coral-light); display: flex; align-items: center;
-            justify-content: center; font-size: 22px;
-        }
-        .veh-placa { font-size: 15px; font-weight: 600; color: var(--texto); font-family: monospace; }
-        .veh-marca { font-size: 12px; color: var(--texto-3); margin-top: 2px; }
-        .veh-card-body { padding: 14px 18px; }
-        .veh-fila { display: flex; justify-content: space-between; font-size: 12px; color: var(--texto-2); margin-bottom: 8px; }
-        .veh-fila:last-child { margin-bottom: 0; }
-        .veh-fila strong { color: var(--texto); font-weight: 500; }
-        .veh-card-footer { padding: 12px 18px; border-top: 1px solid var(--borde); display: flex; gap: 8px; }
-
-        .badge-activo { display: inline-block; font-size: 10px; font-weight: 500; padding: 3px 8px; border-radius: 10px; }
-        .badge-si   { background: var(--verde-light); color: #0F6E56; }
-        .badge-no   { background: var(--error-bg);    color: var(--error); }
-
-        .btn-card { padding: 6px 12px; border-radius: 8px; font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500; cursor: pointer; border: 1px solid var(--borde); background: var(--blanco); color: var(--texto-2); }
-        .btn-card.desactivar { color: var(--error); border-color: rgba(216,90,48,.3); }
-        .btn-card.activar    { color: var(--verde); border-color: rgba(29,158,117,.3); }
-
-        .sin-datos { padding: 48px; text-align: center; font-size: 13px; color: var(--texto-3); background: var(--blanco); border: 1px solid var(--borde); border-radius: 14px; }
-
-        /* Modal */
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; align-items: center; justify-content: center; }
-        .modal-overlay.visible { display: flex; }
-        .modal { background: var(--blanco); border-radius: 20px; padding: 28px 32px; width: 100%; max-width: 440px; }
-        .modal-titulo { font-size: 18px; font-weight: 600; color: var(--texto); margin-bottom: 4px; }
-        .modal-sub    { font-size: 13px; color: var(--texto-2); margin-bottom: 24px; }
-        .campo { margin-bottom: 14px; }
-        .campo label { display: block; font-size: 12px; font-weight: 500; color: var(--texto-2); margin-bottom: 6px; }
-        .campo input, .campo select { width: 100%; padding: 10px 14px; border: 1.5px solid var(--borde); border-radius: 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; color: var(--texto); outline: none; }
-        .campo input:focus { border-color: var(--coral); }
-        .fila-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .modal-acciones { display: flex; gap: 10px; margin-top: 20px; }
-        .btn-modal-cancelar { flex: 1; padding: 12px; border-radius: 10px; border: 1.5px solid var(--borde); background: transparent; font-family: 'DM Sans', sans-serif; font-size: 14px; color: var(--texto-2); cursor: pointer; }
-        .btn-modal-guardar  { flex: 1; padding: 12px; border-radius: 10px; border: none; background: var(--coral-dark); color: white; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; }
+    :root{
+        --role:#FF637E;
+        --role-dark:#C94D60;
+        --role-light:#FFF0F3;
+        --role-subtle:rgba(255,99,126,.1);
+    }
+    </style>
+    <style>
+        .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center}
+        .modal-overlay.visible{display:flex}
+        .modal{background:var(--surface);border-radius:16px;padding:32px;max-width:480px;width:90%}
+        .modal-title{font-size:18px;font-weight:700;margin-bottom:20px}
+        .modal-btns{display:flex;gap:10px;margin-top:20px}
     </style>
 </head>
 <body>
-
-<%
-    List<Object[]> vehiculos = (List<Object[]>) request.getAttribute("vehiculos");
-%>
-
-<nav>
-    <div class="nav-marca">
-        <span class="nav-logo">Urbvan</span>
-        <span class="nav-badge">Administrador</span>
-    </div>
+<nav class="nav">
+    <div class="nav-logo"><img src="${pageContext.request.contextPath}/assets/img/Logo_UrbvanPasajero.png" alt="Urbvan" class="nav-logo-img"></div>
     <div class="nav-links">
-        <a href="${pageContext.request.contextPath}/admin/dashboard"  class="nav-link">Dashboard</a>
-        <a href="${pageContext.request.contextPath}/admin/usuarios"   class="nav-link">Usuarios</a>
-        <a href="${pageContext.request.contextPath}/admin/operadores" class="nav-link">Operadores</a>
-        <a href="${pageContext.request.contextPath}/admin/vehiculos"  class="nav-link activo">Vehículos</a>
-        <a href="${pageContext.request.contextPath}/logout"           class="btn-logout">Salir</a>
+        <a href="${pageContext.request.contextPath}/admin/dashboard">Dashboard</a>
+        <a href="${pageContext.request.contextPath}/admin/usuarios">Pasajeros</a>
+        <a href="${pageContext.request.contextPath}/admin/operadores">Operadores</a>
+        <a href="${pageContext.request.contextPath}/admin/vehiculos" class="activo">Vehículos</a>
+        <a href="${pageContext.request.contextPath}/admin/empresas">Empresas B2B</a>
+        <a href="${pageContext.request.contextPath}/logout" class="logout">Salir</a>
     </div>
 </nav>
-
-<div class="contenedor">
-    <div class="page-header">
-        <div>
-            <div class="page-titulo">Gestión de vehículos</div>
-            <div class="page-sub">Unidades registradas en el sistema</div>
-        </div>
-        <button class="btn-nuevo" onclick="abrirModal()">+ Nuevo vehículo</button>
+<div class="main">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+        <div class="page-title">Gestión de vehículos</div>
+        <button onclick="abrirModal('modalNuevo')" class="btn btn-primary">+ Nuevo vehículo</button>
     </div>
+    <c:if test="${not empty error}"><div class="alerta-error">${error}</div></c:if>
+    <c:if test="${param.ok == 'asignado'}"><div class="alerta-ok">Operador asignado correctamente.</div></c:if>
 
-    <% if (vehiculos == null || vehiculos.isEmpty()) { %>
-    <div class="sin-datos">No hay vehículos registrados.</div>
-    <% } else { %>
-    <div class="veh-grid">
-        <% for (Object[] v : vehiculos) {
-            int    idV     = (int) v[0];
-            String placa   = (String) v[1];
-            String marca   = (String) v[2];
-            String modelo  = (String) v[3];
-            int    anio    = (int) v[4];
-            String color   = v[5] != null ? (String)v[5] : "—";
-            int    cap     = (int) v[6];
-            int    activo  = (int) v[7];
-            String opAsig  = v[8] != null ? (String)v[8] : "Sin operador";
-        %>
-        <div class="veh-card">
-            <div class="veh-card-header">
-                <div class="veh-icono">🚐</div>
-                <div>
-                    <div class="veh-placa"><%= placa %></div>
-                    <div class="veh-marca"><%= marca %> <%= modelo %></div>
-                </div>
-            </div>
-            <div class="veh-card-body">
-                <div class="veh-fila"><span>Año</span><strong><%= anio %></strong></div>
-                <div class="veh-fila"><span>Color</span><strong><%= color %></strong></div>
-                <div class="veh-fila"><span>Capacidad</span><strong><%= cap %> pasajeros</strong></div>
-                <div class="veh-fila"><span>Operador</span><strong style="font-size:11px"><%= opAsig %></strong></div>
-                <div class="veh-fila"><span>Estado</span>
-                    <span class="badge-activo <%= activo == 1 ? "badge-si" : "badge-no" %>">
-                        <%= activo == 1 ? "Activo" : "Inactivo" %>
-                    </span>
-                </div>
-            </div>
-            <div class="veh-card-footer">
-                <form method="POST" action="${pageContext.request.contextPath}/admin/vehiculos" style="display:inline">
-                    <input type="hidden" name="accion" value="toggle_activo">
-                    <input type="hidden" name="id"     value="<%= idV %>">
-                    <input type="hidden" name="activo" value="<%= activo %>">
-                    <button type="submit" class="btn-card <%= activo == 1 ? "desactivar" : "activar" %>">
-                        <%= activo == 1 ? "Desactivar" : "Activar" %>
-                    </button>
-                </form>
-            </div>
-        </div>
-        <% } %>
+    <div class="card">
+        <c:choose>
+            <c:when test="${empty vehiculos}">
+                <div class="empty">Sin vehículos registrados.</div>
+            </c:when>
+            <c:otherwise>
+                <table>
+                    <tr>
+                        <th>Modelo</th><th>Placa</th><th>Capacidad</th>
+                        <th>Categoría</th><th>Operador asignado</th><th>Estado</th><th>Acciones</th>
+                    </tr>
+                    <c:forEach var="vh" items="${vehiculos}">
+                        <tr>
+                            <td style="font-weight:500">${vh.modelo}</td>
+                            <td>${vh.placa}</td>
+                            <td>${vh.capacidad} pax</td>
+                            <td>
+                                <span class="badge ${vh.categoria == 'b2b' ? 'badge-morado' : 'badge-verde'}">
+                                    ${vh.categoria == 'b2b' ? 'B2B - Bus' : 'B2C - Auto'}
+                                </span>
+                            </td>
+                            <td>
+                                <c:choose>
+                                    <c:when test="${empty vh.operadorNombre}">
+                                        <span style="color:var(--texto3)">Sin asignar</span>
+                                    </c:when>
+                                    <c:otherwise>
+                                        <span style="font-weight:500">${vh.operadorNombre}</span>
+                                    </c:otherwise>
+                                </c:choose>
+                            </td>
+                            <td>
+                                <c:choose>
+                                    <c:when test="${vh.activo}"><span class="badge badge-verde">Activo</span></c:when>
+                                    <c:otherwise><span class="badge badge-rojo">Inactivo</span></c:otherwise>
+                                </c:choose>
+                            </td>
+                            <td style="display:flex;gap:6px;flex-wrap:wrap">
+                                <%-- Botón asignar operador --%>
+                                <button onclick="abrirAsignar(${vh.id}, '${vh.modelo} ${vh.placa}')"
+                                        class="btn btn-ghost btn-sm">
+                                    👤 Asignar op.
+                                </button>
+                                <%-- Habilitar / Inhabilitar --%>
+                                <form method="post" action="${pageContext.request.contextPath}/admin/vehiculos">
+                                    <input type="hidden" name="accion" value="toggleActivo">
+                                    <input type="hidden" name="id" value="${vh.id}">
+                                    <button type="submit" class="btn btn-ghost btn-sm">
+                                        ${vh.activo ? 'Inhabilitar' : 'Habilitar'}
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    </c:forEach>
+                </table>
+            </c:otherwise>
+        </c:choose>
     </div>
-    <% } %>
 </div>
 
-<!-- Modal nuevo vehículo -->
-<div class="modal-overlay" id="modal-crear">
+<!-- ── Modal: Nuevo vehículo ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modalNuevo">
     <div class="modal">
-        <div class="modal-titulo">Nuevo vehículo</div>
-        <div class="modal-sub">Registrar una unidad en el sistema</div>
-        <form method="POST" action="${pageContext.request.contextPath}/admin/vehiculos">
+        <div class="modal-title">Registrar nuevo vehículo</div>
+        <form method="post" action="${pageContext.request.contextPath}/admin/vehiculos">
             <input type="hidden" name="accion" value="crear">
-            <div class="fila-campos">
-                <div class="campo"><label>Marca *</label><input type="text" name="marca" placeholder="Toyota" required/></div>
-                <div class="campo"><label>Modelo *</label><input type="text" name="modelo" placeholder="Hiace" required/></div>
+            <div class="form-group">
+                <label class="form-label">Categoría de servicio</label>
+                <select name="categoria" id="selCat" onchange="actualizarModelos(this.value)">
+                    <option value="b2c">B2C - Transporte individual</option>
+                    <option value="b2b">B2B - Bus corporativo</option>
+                </select>
             </div>
-            <div class="fila-campos">
-                <div class="campo"><label>Placa *</label><input type="text" name="placa" placeholder="ABC-123" required/></div>
-                <div class="campo"><label>Año</label><input type="number" name="anio" placeholder="2024" min="2000" max="2030"/></div>
+            <div class="form-group">
+                <label class="form-label">Modelo</label>
+                <select name="modelo" id="selModelo">
+                    <option value="Sedan">Sedan</option>
+                    <option value="SUV">SUV</option>
+                    <option value="Minivan">Minivan</option>
+                </select>
             </div>
-            <div class="fila-campos">
-                <div class="campo"><label>Color</label><input type="text" name="color" placeholder="Blanco"/></div>
-                <div class="campo"><label>Capacidad</label><input type="number" name="capacidad" placeholder="8" min="1" max="20"/></div>
+            <div class="form-group">
+                <label class="form-label">Capacidad (pasajeros)</label>
+                <input type="number" name="capacidad" id="inputCapacidad" min="1" max="70" required placeholder="Ej: 4">
             </div>
-            <div class="modal-acciones">
-                <button type="button" class="btn-modal-cancelar" onclick="cerrarModal()">Cancelar</button>
-                <button type="submit" class="btn-modal-guardar">Registrar vehículo</button>
+            <div class="form-group">
+                <label class="form-label">Placa</label>
+                <input type="text" name="placa" required placeholder="Ej: ABC-123-CDMX">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Color</label>
+                <input type="text" name="color" placeholder="Ej: Blanco">
+            </div>
+            <div class="modal-btns">
+                <button type="button" onclick="cerrarModal('modalNuevo')" class="btn btn-ghost">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Registrar vehículo</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Modal: Asignar operador ───────────────────────────────────────────── -->
+<div class="modal-overlay" id="modalAsignar">
+    <div class="modal">
+        <div class="modal-title">Asignar operador a <span id="lblVehiculo"></span></div>
+        <form method="post" action="${pageContext.request.contextPath}/admin/vehiculos">
+            <input type="hidden" name="accion" value="asignar">
+            <input type="hidden" name="vehiculoId" id="inputVehiculoId">
+            <div class="form-group">
+                <label class="form-label">Selecciona un operador sin vehículo</label>
+                <select name="operadorId" id="selOperador">
+                    <c:choose>
+                        <c:when test="${empty operadoresDisponibles}">
+                            <option value="" disabled>Sin operadores disponibles</option>
+                        </c:when>
+                        <c:otherwise>
+                            <c:forEach var="op" items="${operadoresDisponibles}">
+                                <option value="${op.id}">${op.nombre}</option>
+                            </c:forEach>
+                        </c:otherwise>
+                    </c:choose>
+                </select>
+                <p style="color:var(--texto2);font-size:12px;margin-top:6px">
+                    Solo aparecen operadores que aún no tienen vehículo asignado.
+                </p>
+            </div>
+            <div class="modal-btns">
+                <button type="button" onclick="cerrarModal('modalAsignar')" class="btn btn-ghost">Cancelar</button>
+                <button type="submit" class="btn btn-primary"
+                        ${empty operadoresDisponibles ? 'disabled' : ''}>
+                    Asignar
+                </button>
             </div>
         </form>
     </div>
 </div>
 
 <script>
-function abrirModal()  { document.getElementById('modal-crear').classList.add('visible'); }
-function cerrarModal() { document.getElementById('modal-crear').classList.remove('visible'); }
-document.getElementById('modal-crear').addEventListener('click', function(e) {
-    if (e.target === this) cerrarModal();
+// Modelos por categoría con capacidades por defecto
+const DATOS = {
+    b2c: [{m:'Sedan',c:4},{m:'SUV',c:6},{m:'Minivan',c:8}],
+    b2b: [
+        {m:'Irizar_i8',c:47},{m:'Busstar_DD',c:66},{m:'Marcopolo_G7',c:44},
+        {m:'Volvo_9800',c:44},{m:'Irizar_i6',c:50},{m:'Torino',c:43}
+    ]
+};
+
+function actualizarModelos(cat) {
+    const lista = DATOS[cat] || DATOS.b2c;
+    const sel   = document.getElementById('selModelo');
+    const cap   = document.getElementById('inputCapacidad');
+    sel.innerHTML = lista.map(d =>
+        `<option value="${d.m}">${d.m.replace('_',' ')}</option>`
+    ).join('');
+    cap.value = lista[0].c; // precargar capacidad del primer modelo
+    sel.onchange = () => {
+        const found = lista.find(d => d.m === sel.value);
+        if (found) cap.value = found.c;
+    };
+}
+
+// Actualizar capacidad al cambiar modelo (inicialización)
+document.getElementById('selModelo').onchange = function() {
+    const cat   = document.getElementById('selCat').value;
+    const lista = DATOS[cat] || DATOS.b2c;
+    const found = lista.find(d => d.m === this.value);
+    if (found) document.getElementById('inputCapacidad').value = found.c;
+};
+
+function abrirModal(id) {
+    document.getElementById(id).classList.add('visible');
+}
+function cerrarModal(id) {
+    document.getElementById(id).classList.remove('visible');
+}
+function abrirAsignar(vehiculoId, label) {
+    document.getElementById('inputVehiculoId').value = vehiculoId;
+    document.getElementById('lblVehiculo').textContent = label;
+    abrirModal('modalAsignar');
+}
+// Cerrar modales al hacer clic fuera
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', function(e) {
+        if (e.target === this) this.classList.remove('visible');
+    });
 });
 </script>
 </body>

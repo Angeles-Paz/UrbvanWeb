@@ -1,139 +1,86 @@
 package mx.urbvan.servlet.admin;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
 import mx.urbvan.dao.ConexionDB;
+import mx.urbvan.modelo.Usuario;
 import mx.urbvan.util.HashUtil;
-
-import java.io.IOException;
+import java.io.*;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
- * GestionUsuariosServlet — CRUD de pasajeros para el administrador.
- *
- * GET  → lista usuarios con filtro opcional por nombre/correo
- * POST → acción según parámetro "accion": crear, editar, toggle_activo, eliminar
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/admin/GestionUsuariosServlet.java
+ * GestionUsuariosServlet - CRUD de pasajeros para el admin.
+ * CAMBIOS vs v1: filtra usuarios WHERE rol='pasajero' en tabla unificada;
+ * columnas email (antes correo), contrasena (antes contrasena_hash).
  */
+@WebServlet("/admin/usuarios")
 public class GestionUsuariosServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        String busqueda = req.getParameter("q");
-
-        try (Connection conn = ConexionDB.obtener()) {
-
-            String sql = """
-                SELECT u.id_usuario, u.nombre, u.apellido, u.correo,
-                       u.telefono, u.activo, u.fecha_registro,
-                       COUNT(v.id_viaje) AS total_viajes
-                FROM usuarios u
-                LEFT JOIN viajes v ON v.id_usuario = u.id_usuario
-                """;
-
-            if (busqueda != null && !busqueda.isBlank()) {
-                sql += " WHERE u.nombre LIKE ? OR u.apellido LIKE ? OR u.correo LIKE ?";
-            }
-
-            sql += " GROUP BY u.id_usuario ORDER BY u.fecha_registro DESC";
-
-            List<Object[]> usuarios = new ArrayList<>();
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                if (busqueda != null && !busqueda.isBlank()) {
-                    String like = "%" + busqueda + "%";
-                    ps.setString(1, like);
-                    ps.setString(2, like);
-                    ps.setString(3, like);
-                }
-                ResultSet rs = ps.executeQuery();
-                while (rs.next()) {
-                    usuarios.add(new Object[]{
-                        rs.getInt("id_usuario"),
-                        rs.getString("nombre"),
-                        rs.getString("apellido"),
-                        rs.getString("correo"),
-                        rs.getString("telefono"),
-                        rs.getInt("activo"),
-                        rs.getTimestamp("fecha_registro"),
-                        rs.getInt("total_viajes")
-                    });
-                }
-            }
-            req.setAttribute("usuarios", usuarios);
-            req.setAttribute("busqueda", busqueda);
-
+            throws IOException, jakarta.servlet.ServletException {
+        try (Connection c = ConexionDB.obtener()) {
+            req.setAttribute("usuarios", listarPasajeros(c));
+            req.getRequestDispatcher("/WEB-INF/vistas/admin/usuarios.jsp").forward(req, res);
         } catch (Exception e) {
-            req.setAttribute("error", "Error al cargar usuarios: " + e.getMessage());
+            req.setAttribute("error", "Error al cargar usuarios.");
+            req.getRequestDispatcher("/WEB-INF/vistas/admin/usuarios.jsp").forward(req, res);
         }
-
-        req.getRequestDispatcher("/WEB-INF/vistas/admin/usuarios.jsp").forward(req, res);
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
+            throws IOException, jakarta.servlet.ServletException {
         req.setCharacterEncoding("UTF-8");
         String accion = req.getParameter("accion");
-
-        try (Connection conn = ConexionDB.obtener()) {
-
+        try (Connection c = ConexionDB.obtener()) {
             switch (accion != null ? accion : "") {
-
-                case "crear" -> {
-                    String nombre     = req.getParameter("nombre");
-                    String apellido   = req.getParameter("apellido");
-                    String correo     = req.getParameter("correo");
-                    String telefono   = req.getParameter("telefono");
-                    String contrasena = req.getParameter("contrasena");
-
-                    if (nombre == null || correo == null || contrasena == null) break;
-
-                    String sql = """
-                        INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono)
-                        VALUES (?, ?, ?, ?, ?)
-                        """;
-                    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                        ps.setString(1, nombre.trim());
-                        ps.setString(2, apellido != null ? apellido.trim() : "");
-                        ps.setString(3, correo.trim().toLowerCase());
-                        ps.setString(4, HashUtil.sha256(contrasena));
-                        ps.setString(5, telefono);
-                        ps.executeUpdate();
-                    }
-                }
-
-                case "toggle_activo" -> {
-                    int id    = Integer.parseInt(req.getParameter("id"));
-                    int valor = Integer.parseInt(req.getParameter("activo"));
-                    try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE usuarios SET activo = ? WHERE id_usuario = ?")) {
-                        ps.setInt(1, valor == 1 ? 0 : 1);
-                        ps.setInt(2, id);
-                        ps.executeUpdate();
-                    }
-                }
-
-                case "eliminar" -> {
-                    int id = Integer.parseInt(req.getParameter("id"));
-                    // Solo desactivar, no eliminar físicamente
-                    try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE usuarios SET activo = 0 WHERE id_usuario = ?")) {
-                        ps.setInt(1, id);
-                        ps.executeUpdate();
-                    }
-                }
+                case "toggleActivo" -> toggleActivo(c, Integer.parseInt(req.getParameter("id")));
+                case "resetPassword" -> resetPassword(c,
+                        Integer.parseInt(req.getParameter("id")),
+                        req.getParameter("nuevaPassword"));
             }
-
         } catch (Exception e) {
-            // Continuar y mostrar la lista aunque haya error
+            req.setAttribute("error", "Error al procesar la operación.");
         }
-
         res.sendRedirect(req.getContextPath() + "/admin/usuarios");
+    }
+
+    private List<Usuario> listarPasajeros(Connection c) throws SQLException {
+        // v1 consultaba tabla separada; v2 filtra por rol en tabla unificada
+        String sql = """
+            SELECT id, nombre, email, rol, activo, calificacion_promedio, created_at
+            FROM   usuarios
+            WHERE  rol = 'pasajero'
+            ORDER BY nombre
+            """;
+        List<Usuario> lista = new ArrayList<>();
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                Usuario u = new Usuario();
+                u.setId(rs.getInt("id"));
+                u.setNombre(rs.getString("nombre"));
+                u.setEmail(rs.getString("email"));
+                u.setRol(rs.getString("rol"));
+                u.setActivo(rs.getBoolean("activo"));
+                u.setCalificacionPromedio(rs.getDouble("calificacion_promedio"));
+                lista.add(u);
+            }
+        }
+        return lista;
+    }
+    private void toggleActivo(Connection c, int id) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE usuarios SET activo = NOT activo WHERE id=? AND rol='pasajero'")) {
+            ps.setInt(1, id); ps.executeUpdate();
+        }
+    }
+    private void resetPassword(Connection c, int id, String nuevaPassword) throws Exception {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE usuarios SET contrasena=? WHERE id=? AND rol='pasajero'")) {
+            ps.setString(1, HashUtil.sha256(nuevaPassword));
+            ps.setInt(2, id); ps.executeUpdate();
+        }
     }
 }

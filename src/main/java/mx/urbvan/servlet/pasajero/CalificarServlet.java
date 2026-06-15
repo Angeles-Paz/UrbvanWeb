@@ -1,80 +1,62 @@
 package mx.urbvan.servlet.pasajero;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
-import mx.urbvan.dao.ConexionDB;
-
+import mx.urbvan.dao.ViajeDAO;
+import mx.urbvan.modelo.Viaje;
 import java.io.IOException;
-import java.sql.*;
 
 /**
- * CalificarServlet — guarda la calificación del pasajero al operador.
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/pasajero/CalificarServlet.java
+ * CalificarServlet - registra calificación del pasajero al operador tras el viaje.
+ * CAMBIOS vs v1: tabla calificaciones → calificaciones_viaje; llama SP de recalculo.
+ * La puntuación es 0-100 (antes podía ser 1-5 estrellas).
  */
+@WebServlet("/pasajero/calificar")
 public class CalificarServlet extends HttpServlet {
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        req.setCharacterEncoding("UTF-8");
-
-        String idViajeStr   = req.getParameter("id_viaje");
-        String idOperStr    = req.getParameter("id_operador");
-        String puntuacionStr= req.getParameter("puntuacion");
-        String comentario   = req.getParameter("comentario");
-
-        if (idViajeStr == null || idOperStr == null || puntuacionStr == null) {
-            res.sendRedirect(req.getContextPath() + "/pasajero/dashboard");
+    protected void doGet(HttpServletRequest req, HttpServletResponse res)
+            throws IOException, jakarta.servlet.ServletException {
+        String idParam = req.getParameter("viajeId");
+        if (idParam == null) {
+            res.sendRedirect(req.getContextPath() + "/pasajero/historial");
             return;
         }
-
         try {
-            int idViaje    = Integer.parseInt(idViajeStr);
-            int idOperador = Integer.parseInt(idOperStr);
-            int puntuacion = Integer.parseInt(puntuacionStr);
-
-            // Validar rango
-            if (puntuacion < 1 || puntuacion > 5) {
-                res.sendRedirect(req.getContextPath() + "/pasajero/dashboard");
+            Viaje v = ViajeDAO.buscarPorId(Integer.parseInt(idParam));
+            if (v == null || v.getEstado() != Viaje.Estado.COMPLETADO
+                    || v.getCalificacionDada() >= 0) {
+                res.sendRedirect(req.getContextPath() + "/pasajero/historial");
                 return;
             }
-
-            try (Connection conn = ConexionDB.obtener()) {
-
-                // Insertar calificación (ignorar si ya existe)
-                String sqlCal = """
-                    INSERT IGNORE INTO calificaciones
-                        (id_viaje, id_operador, puntuacion, comentario)
-                    VALUES (?, ?, ?, ?)
-                    """;
-                try (PreparedStatement ps = conn.prepareStatement(sqlCal)) {
-                    ps.setInt(1,    idViaje);
-                    ps.setInt(2,    idOperador);
-                    ps.setInt(3,    puntuacion);
-                    ps.setString(4, comentario != null ? comentario.trim() : null);
-                    ps.executeUpdate();
-                }
-
-                // Recalcular promedio del operador
-                String sqlProm = """
-                    UPDATE operadores SET calificacion_prom = (
-                        SELECT AVG(puntuacion) FROM calificaciones WHERE id_operador = ?
-                    ) WHERE id_operador = ?
-                    """;
-                try (PreparedStatement ps = conn.prepareStatement(sqlProm)) {
-                    ps.setInt(1, idOperador);
-                    ps.setInt(2, idOperador);
-                    ps.executeUpdate();
-                }
-            }
-
-            res.sendRedirect(req.getContextPath() +
-                "/pasajero/dashboard?viaje=calificado");
-
+            req.setAttribute("viaje", v);
+            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/calificar.jsp").forward(req, res);
         } catch (Exception e) {
-            res.sendRedirect(req.getContextPath() + "/pasajero/dashboard");
+            res.sendRedirect(req.getContextPath() + "/pasajero/historial");
+        }
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse res)
+            throws IOException, jakarta.servlet.ServletException {
+        int uid = (int) req.getSession().getAttribute("id");
+        try {
+            int    viajeId   = Integer.parseInt(req.getParameter("viajeId"));
+            int    puntuacion= Integer.parseInt(req.getParameter("puntuacion"));
+            String comentario= req.getParameter("comentario");
+
+            Viaje v = ViajeDAO.buscarPorId(viajeId);
+            if (v == null || v.getPasajeroId() != uid) {
+                res.sendRedirect(req.getContextPath() + "/pasajero/historial");
+                return;
+            }
+            // Inserta en calificaciones_viaje y recalcula score del operador via SP
+            ViajeDAO.insertarCalificacion(viajeId, uid, v.getOperadorId(),
+                                          puntuacion, comentario);
+            res.sendRedirect(req.getContextPath() + "/pasajero/historial?calificado=ok");
+        } catch (Exception e) {
+            req.setAttribute("error", "Error al guardar la calificación.");
+            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/calificar.jsp").forward(req, res);
         }
     }
 }

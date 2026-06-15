@@ -4,7 +4,7 @@ import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 
 /**
- * HashUtil — utilidad para hashear contraseñas con SHA-256.
+ * HashUtil - utilidad para hashear contraseñas con SHA-256.
  *
  * Uso:
  *   String hash = HashUtil.sha256("MiContrasena123");
@@ -32,6 +32,6 @@ public class HashUtil {
         }
     }
 
-    // Constructor privado — clase de utilidad, no se instancia
+    // Constructor privado - clase de utilidad, no se instancia
     private HashUtil() {}
 }

@@ -1,255 +1,246 @@
-// ============================================================
-//  mapa.js — lógica de Azure Maps para solicitar-viaje.jsp
-//  Ubicación: src/main/webapp/assets/js/mapa.js
-// ============================================================
+/**
+ * mapa.js - Urbvan v2  |  Azure Maps SDK v3
+ *
+ * El JSP debe definir ANTES de cargar este script:
+ *   const AZURE_KEY = '<%= application.getInitParameter("azure.maps.key") %>';
+ *
+ * Contenedor del mapa : <div id="mapa">
+ *
+ * IDs de labels que actualiza (panel derecho):
+ *   lblOrigen, lblDestino, lblDistancia, lblDuracion, lblCosto, msgMapa
+ *
+ * IDs de hidden fields del formulario:
+ *   origenLat, origenLng, origenNombre,
+ *   destinoLat, destinoLng, destinoNombre,
+ *   distanciaKm, duracionMin
+ */
 
-// AZURE_KEY y CTX_PATH se inyectan desde el JSP como variables globales
+'use strict';
 
-const CDMX_BOUNDS = {
-    norte: 19.593, sur: 19.185,
-    este: -98.940, oeste: -99.365
-};
+// ── Estado del módulo ────────────────────────────────────────────────────────
+let _map;
+let _dsOrigen, _dsDestino, _dsRuta;
+let _origenPos  = null;   // { lat, lng, nombre }
+let _destinoPos = null;
+let _turno      = 'origen';  // 'origen' | 'destino'
 
-let origen  = null;
-let destino = null;
-let mapa, marcadorOrigen, marcadorDestino, lineaRuta;
+const COSTO_BASE = 35;
+const COSTO_KM   = 12;
 
-window.addEventListener('load', function () {
-    mapa = new atlas.Map('mapa', {
-        center: [-99.1332, 19.4326],
-        zoom: 11,
+// ── Punto de entrada: esperar a que el DOM y el SDK estén listos ─────────────
+document.addEventListener('DOMContentLoaded', function () {
+
+    // Validar que la key existe
+    if (typeof AZURE_KEY === 'undefined' || !AZURE_KEY || AZURE_KEY === 'null') {
+        var contenedor = document.getElementById('mapa');
+        if (contenedor) {
+            contenedor.style.cssText =
+                'display:flex;align-items:center;justify-content:center;' +
+                'background:#1e293b;color:#ef4444;font-family:sans-serif;font-size:14px';
+            contenedor.textContent = '⚠ azure.maps.key no configurada en web.xml';
+        }
+        return;
+    }
+
+    // Inicializar mapa
+    _map = new atlas.Map('mapa', {
+        center:   [-99.1332, 19.4326],
+        zoom:     11,
         language: 'es-MX',
+        style:    'road',
         authOptions: {
-            authType: 'subscriptionKey',
+            authType:        'subscriptionKey',
             subscriptionKey: AZURE_KEY
         }
     });
 
-    mapa.events.add('ready', function () {
-        mapa.events.add('click', onMapClick);
-        document.getElementById('input-destino')
-            .addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') buscarDireccion(e.target.value);
-            });
-    });
+    _map.events.add('ready', onMapReady);
 });
 
-function onMapClick(e) {
-    var pos = e.position;
-    var lat = pos[1], lng = pos[0];
+// ── Callback cuando el mapa terminó de cargar ────────────────────────────────
+function onMapReady() {
 
-    if (!dentroDeCDMX(lat, lng)) {
-        mostrarError('El punto seleccionado está fuera de la Ciudad de México.');
-        return;
-    }
+    // Data sources
+    _dsOrigen  = new atlas.source.DataSource();
+    _dsDestino = new atlas.source.DataSource();
+    _dsRuta    = new atlas.source.DataSource();
+    _map.sources.add([_dsRuta, _dsOrigen, _dsDestino]);
 
-    ocultarError();
-    geocodificacionInversa(lat, lng, function (direccion) {
-        if (!origen) {
-            origen = { lat: lat, lng: lng, direccion: direccion };
-            document.getElementById('input-origen').value = direccion;
-            ponerMarcador('origen', lat, lng);
-        } else {
-            destino = { lat: lat, lng: lng, direccion: direccion };
-            document.getElementById('input-destino').value = direccion;
-            ponerMarcador('destino', lat, lng);
-            calcularRuta();
-        }
-    });
+    // Capa de ruta (línea verde)
+    _map.layers.add(new atlas.layer.LineLayer(_dsRuta, null, {
+        strokeColor: '#10b981',
+        strokeWidth: 4,
+        lineCap:     'round',
+        lineJoin:    'round'
+    }));
+
+    // Pin ORIGEN (verde)
+    _map.layers.add(new atlas.layer.BubbleLayer(_dsOrigen, null, {
+        color:       '#10b981',
+        radius:      10,
+        strokeColor: '#ffffff',
+        strokeWidth: 3
+    }));
+
+    // Pin DESTINO (rojo)
+    _map.layers.add(new atlas.layer.BubbleLayer(_dsDestino, null, {
+        color:       '#ef4444',
+        radius:      10,
+        strokeColor: '#ffffff',
+        strokeWidth: 3
+    }));
+
+    // Registrar el handler de clic
+    _map.events.add('click', onMapClick);
+
+    setMensaje('Haz clic en el mapa para colocar el origen 🟢');
 }
 
-function ponerMarcador(tipo, lat, lng) {
-    var color = tipo === 'origen' ? '#1D9E75' : '#D85A30';
-    var pos   = [lng, lat];
+// ── Handler de clic en el mapa ───────────────────────────────────────────────
+async function onMapClick(e) {
 
-    if (tipo === 'origen') {
-        if (marcadorOrigen) mapa.markers.remove(marcadorOrigen);
-        marcadorOrigen = new atlas.HtmlMarker({ color: color, position: pos });
-        mapa.markers.add(marcadorOrigen);
+    // Guardia: en v3 el clic sobre controles del mapa puede dar e.position null
+    if (!e || !e.position) return;
+
+    var lng = e.position[0];  // Azure Maps: [longitude, latitude]
+    var lat = e.position[1];
+
+    // Guardia extra: coordenadas deben ser números válidos
+    if (typeof lng !== 'number' || typeof lat !== 'number' ||
+        isNaN(lng) || isNaN(lat)) return;
+
+    setMensaje('Obteniendo dirección...');
+    var nombre = await geocodificarInverso(lat, lng);
+    var pos    = [lng, lat];   // formato [lng, lat] para Atlas
+
+    if (_turno === 'origen') {
+        _origenPos = { lat: lat, lng: lng, nombre: nombre };
+        _dsOrigen.clear();
+        _dsOrigen.add(new atlas.data.Feature(new atlas.data.Point(pos)));
+        setLabel('lblOrigen', nombre);
+        setCampo('origenLat',    lat);
+        setCampo('origenLng',    lng);
+        setCampo('origenNombre', nombre);
+        _turno = 'destino';
+        setMensaje('Ahora haz clic para colocar el destino 🔴');
+
     } else {
-        if (marcadorDestino) mapa.markers.remove(marcadorDestino);
-        marcadorDestino = new atlas.HtmlMarker({ color: color, position: pos });
-        mapa.markers.add(marcadorDestino);
+        _destinoPos = { lat: lat, lng: lng, nombre: nombre };
+        _dsDestino.clear();
+        _dsDestino.add(new atlas.data.Feature(new atlas.data.Point(pos)));
+        setLabel('lblDestino',   nombre);
+        setCampo('destinoLat',    lat);
+        setCampo('destinoLng',    lng);
+        setCampo('destinoNombre', nombre);
+        _turno = 'origen';
+        setMensaje('Haz clic para reemplazar el origen 🟢');
+    }
+
+    // Calcular ruta cuando ambos puntos están definidos
+    if (_origenPos && _destinoPos) {
+        setMensaje('Calculando ruta...');
+        await calcularRuta();
     }
 }
 
-function calcularRuta() {
-    if (!origen || !destino) return;
+// ── Geocodificación inversa (lat,lng → nombre legible) ───────────────────────
+async function geocodificarInverso(lat, lng) {
+    try {
+        var url = 'https://atlas.microsoft.com/search/address/reverse/json' +
+                  '?api-version=1.0' +
+                  '&subscription-key=' + AZURE_KEY +
+                  '&query=' + lat + ',' + lng +
+                  '&language=es-MX';
 
-    var url = 'https://atlas.microsoft.com/route/directions/json' +
-        '?api-version=1.0' +
-        '&query=' + origen.lat + ',' + origen.lng + ':' + destino.lat + ',' + destino.lng +
-        '&travelMode=car&language=es-MX' +
-        '&subscription-key=' + AZURE_KEY;
+        var res  = await fetch(url);
+        var data = await res.json();
+        var addr = data.addresses && data.addresses[0] && data.addresses[0].address;
 
-    fetch(url)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            var ruta    = data.routes[0];
-            var sumario = ruta.summary;
-            var distKm  = (sumario.lengthInMeters / 1000).toFixed(2);
-            var etaMin  = Math.ceil(sumario.travelTimeInSeconds / 60);
-            var precio  = 15.0 + (parseFloat(distKm) * 8.5) + 3.0;
+        if (!addr) return lat.toFixed(5) + ', ' + lng.toFixed(5);
 
-            document.getElementById('r-distancia').textContent = distKm + ' km';
-            document.getElementById('r-eta').textContent       = etaMin + ' min';
-            document.getElementById('r-costo-km').textContent  = '$' + (parseFloat(distKm) * 8.5).toFixed(2);
-            document.getElementById('r-total').textContent     = '$' + precio.toFixed(2);
-
-            document.getElementById('resumen').classList.add('visible');
-            document.getElementById('btn-confirmar').classList.add('visible');
-
-            document.getElementById('f-origen-lat').value  = origen.lat;
-            document.getElementById('f-origen-lng').value  = origen.lng;
-            document.getElementById('f-origen-dir').value  = origen.direccion;
-            document.getElementById('f-destino-lat').value = destino.lat;
-            document.getElementById('f-destino-lng').value = destino.lng;
-            document.getElementById('f-destino-dir').value = destino.direccion;
-            document.getElementById('f-distancia').value   = distKm;
-            document.getElementById('f-eta').value         = etaMin;
-
-            dibujarRuta(ruta.legs[0].points);
-        })
-        .catch(function () {
-            mostrarError('Error al calcular la ruta. Verifica tu clave de Azure Maps.');
-        });
-}
-
-function dibujarRuta(puntos) {
-    var coords = puntos.map(function (p) { return [p.longitude, p.latitude]; });
-
-    // Eliminar capa y fuente anteriores si existen
-    if (mapa.layers.getLayerById('ruta-layer')) {
-        mapa.layers.remove('ruta-layer');
+        return addr.streetNameAndNumber
+            || addr.streetName
+            || addr.freeformAddress
+            || (lat.toFixed(5) + ', ' + lng.toFixed(5));
+    } catch (err) {
+        console.warn('[mapa.js] geocodificarInverso error:', err);
+        return lat.toFixed(5) + ', ' + lng.toFixed(5);
     }
-    if (mapa.sources.getById('ruta-source')) {
-        mapa.sources.remove('ruta-source');
-    }
-
-    var source = new atlas.source.DataSource('ruta-source');
-    mapa.sources.add(source);
-    source.add(new atlas.data.LineString(coords));
-
-    lineaRuta = new atlas.layer.LineLayer(source, 'ruta-layer', {
-        strokeColor: '#1D9E75',
-        strokeWidth: 4
-    });
-
-    mapa.layers.add(lineaRuta);
-
-    var positions = coords.map(function (c) {
-        return new atlas.data.Position(c[0], c[1]);
-    });
-
-    mapa.setCamera({
-        bounds: atlas.data.BoundingBox.fromPositions(positions),
-        padding: 60
-    });
 }
 
-function geocodificacionInversa(lat, lng, callback) {
-    var url = 'https://atlas.microsoft.com/search/address/reverse/json' +
-        '?api-version=1.0&query=' + lat + ',' + lng +
-        '&language=es-MX&subscription-key=' + AZURE_KEY;
+// ── Cálculo de ruta (REST API - compatible v2 y v3) ──────────────────────────
+async function calcularRuta() {
+    try {
+        var url = 'https://atlas.microsoft.com/route/directions/json' +
+                  '?api-version=1.0' +
+                  '&subscription-key=' + AZURE_KEY +
+                  '&query=' + _origenPos.lat  + ',' + _origenPos.lng  +
+                  ':'       + _destinoPos.lat + ',' + _destinoPos.lng +
+                  '&routeType=fastest&traffic=true&language=es-MX';
 
-    fetch(url)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            var addr = data.addresses && data.addresses[0] && data.addresses[0].address;
-            var dir  = addr
-                ? ((addr.streetName || '') + ' ' + (addr.streetNumber || '') +
-                   (addr.municipalitySubdivision ? ', ' + addr.municipalitySubdivision : ''))
-                : (lat.toFixed(5) + ', ' + lng.toFixed(5));
-            callback(dir.trim());
-        })
-        .catch(function () {
-            callback(lat.toFixed(5) + ', ' + lng.toFixed(5));
-        });
-}
+        var res  = await fetch(url);
+        var data = await res.json();
 
-function buscarDireccion(texto) {
-    if (!texto.trim()) return;
-
-    var url = 'https://atlas.microsoft.com/search/address/json' +
-        '?api-version=1.0&query=' + encodeURIComponent(texto + ' Ciudad de México') +
-        '&language=es-MX&countrySet=MX&subscription-key=' + AZURE_KEY;
-
-    fetch(url)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            var resultado = data.results && data.results[0];
-            if (!resultado) {
-                mostrarError('No se encontró esa dirección.');
-                return;
-            }
-            var lat = resultado.position.lat;
-            var lng = resultado.position.lon;
-
-            if (!dentroDeCDMX(lat, lng)) {
-                mostrarError('La dirección está fuera de la Ciudad de México.');
-                return;
-            }
-
-            ocultarError();
-            destino = { lat: lat, lng: lng, direccion: resultado.address.freeformAddress };
-            document.getElementById('input-destino').value = destino.direccion;
-            ponerMarcador('destino', lat, lng);
-            if (origen) calcularRuta();
-            else mapa.setCamera({ center: [lng, lat], zoom: 15 });
-        })
-        .catch(function () { mostrarError('Error al buscar la dirección.'); });
-}
-
-function usarUbicacionActual() {
-    if (!navigator.geolocation) {
-        mostrarError('Tu navegador no soporta geolocalización.');
-        return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-        function (pos) {
-            var lat = pos.coords.latitude;
-            var lng = pos.coords.longitude;
-
-            if (!dentroDeCDMX(lat, lng)) {
-                mostrarError('Tu ubicación actual está fuera de la Ciudad de México.');
-                return;
-            }
-
-            ocultarError();
-            geocodificacionInversa(lat, lng, function (direccion) {
-                origen = { lat: lat, lng: lng, direccion: direccion };
-                document.getElementById('input-origen').value = direccion;
-                ponerMarcador('origen', lat, lng);
-                mapa.setCamera({ center: [lng, lat], zoom: 15 });
-                if (destino) calcularRuta();
-            });
-        },
-        function () {
-            mostrarError('No se pudo obtener tu ubicación. Selecciónala en el mapa.');
+        if (!data.routes || data.routes.length === 0) {
+            setMensaje('⚠ No se encontró ruta entre esos puntos. Intenta otras ubicaciones.');
+            return;
         }
-    );
-}
 
-function confirmarViaje() {
-    if (!origen || !destino) {
-        mostrarError('Selecciona origen y destino antes de continuar.');
-        return;
+        var ruta    = data.routes[0];
+        var distKm  = parseFloat((ruta.summary.lengthInMeters  / 1000).toFixed(2));
+        var durMin  = Math.round(ruta.summary.travelTimeInSeconds / 60);
+        var costo   = (COSTO_BASE + distKm * COSTO_KM).toFixed(2);
+
+        // Actualizar panel lateral
+        setLabel('lblDistancia', distKm + ' km');
+        setLabel('lblDuracion',  durMin + ' min');
+        setLabel('lblCosto',     '$' + costo + ' MXN');
+
+        // Llenar hidden fields del formulario
+        setCampo('distanciaKm', distKm);
+        setCampo('duracionMin', durMin);
+
+        // Dibujar polyline
+        var coords = ruta.legs[0].points.map(function(p) {
+            return [p.longitude, p.latitude];
+        });
+        _dsRuta.clear();
+        _dsRuta.add(new atlas.data.Feature(new atlas.data.LineString(coords)));
+
+        // Encuadrar la cámara en la ruta completa
+        _map.setCamera({
+            bounds:  atlas.data.BoundingBox.fromPositions(coords),
+            padding: 60
+        });
+
+        // Habilitar botón de submit
+        var btn = document.getElementById('btnSolicitar');
+        if (btn) btn.disabled = false;
+
+        setMensaje('✓ Ruta lista. Revisa el resumen y confirma.');
+
+    } catch (err) {
+        console.error('[mapa.js] calcularRuta error:', err);
+        setMensaje('⚠ Error al calcular la ruta. Intenta de nuevo.');
     }
-    document.getElementById('form-viaje').submit();
 }
 
-function dentroDeCDMX(lat, lng) {
-    return lat >= CDMX_BOUNDS.sur  && lat <= CDMX_BOUNDS.norte &&
-           lng >= CDMX_BOUNDS.oeste && lng <= CDMX_BOUNDS.este;
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Actualiza el texto de un label por id (sin lanzar error si no existe). */
+function setLabel(id, texto) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = texto;
 }
 
-function mostrarError(msg) {
-    var el = document.getElementById('alerta');
-    el.textContent = msg;
-    el.classList.add('visible');
+/** Actualiza el value de un input oculto por id. */
+function setCampo(id, valor) {
+    var el = document.getElementById(id);
+    if (el) el.value = valor;
 }
 
-function ocultarError() {
-    document.getElementById('alerta').classList.remove('visible');
+/** Muestra un mensaje de estado debajo del botón. */
+function setMensaje(texto) {
+    var el = document.getElementById('msgMapa');
+    if (el) el.textContent = texto;
 }

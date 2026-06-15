@@ -1,109 +1,40 @@
 package mx.urbvan.servlet.pasajero;
 
-import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.*;
-import mx.urbvan.dao.ConexionDB;
 import mx.urbvan.dao.ViajeDAO;
 import mx.urbvan.modelo.Viaje;
-
 import java.io.IOException;
-import java.sql.*;
 
 /**
- * CancelarViajeServlet — cancela un viaje activo del pasajero.
- *
- * Solo permite cancelar si el viaje está en estado:
- *   EN_ASIGNACION o ACEPTADO
- *
- * Si ya inició (VIAJE_INICIADO) no se puede cancelar.
- *
- * Ubicación: src/main/java/mx/urbvan/servlet/pasajero/CancelarViajeServlet.java
+ * CancelarViajeServlet - cancela el viaje activo del pasajero.
+ * CAMBIOS vs v1: usa ViajeDAO.cancelar() con nueva columna cancelado_por.
  */
+@WebServlet("/pasajero/cancelar-viaje")
 public class CancelarViajeServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws ServletException, IOException {
-
-        req.setCharacterEncoding("UTF-8");
-
-        String idStr  = req.getParameter("id_viaje");
-        int idUsuario = (int) req.getSession().getAttribute("id");
-
-        if (idStr == null || idStr.isBlank()) {
-            res.sendRedirect(req.getContextPath() + "/pasajero/dashboard");
-            return;
-        }
-
+            throws IOException, jakarta.servlet.ServletException {
+        int uid = (int) req.getSession().getAttribute("id");
         try {
-            int   idViaje = Integer.parseInt(idStr);
-            Viaje viaje   = new ViajeDAO().buscarPorId(idViaje);
-
-            // Validar que el viaje pertenece al usuario en sesión
-            if (viaje == null || viaje.getIdUsuario() != idUsuario) {
-                res.sendRedirect(req.getContextPath() + "/pasajero/dashboard");
+            Viaje v = ViajeDAO.buscarActivoPasajero(uid);
+            if (v == null) {
+                res.sendRedirect(req.getContextPath() + "/pasajero/solicitar");
                 return;
             }
-
-            // Validar que el viaje se puede cancelar
-            Viaje.Estado estado = viaje.getEstado();
-            boolean cancelable  = estado == Viaje.Estado.EN_ASIGNACION
-                               || estado == Viaje.Estado.ACEPTADO
-                               || estado == Viaje.Estado.SOLICITADO;
-
-            if (!cancelable) {
-                // Viaje ya iniciado — no se puede cancelar, redirigir al seguimiento
-                res.sendRedirect(req.getContextPath() +
-                    "/pasajero/estado-viaje?id=" + idViaje + "&error=noCancelable");
+            // Solo puede cancelar si el viaje aún no está en curso
+            if (v.getEstado() == Viaje.Estado.EN_CAMINO || v.getEstado() == Viaje.Estado.EN_CURSO) {
+                req.setAttribute("error", "No puedes cancelar un viaje que ya está en curso.");
+                req.setAttribute("viaje", v);
+                req.getRequestDispatcher("/WEB-INF/vistas/pasajero/estado.jsp").forward(req, res);
                 return;
             }
-
-            try (Connection conn = ConexionDB.obtener()) {
-
-                // --- 1. Cancelar el viaje ---
-                String sqlViaje = "UPDATE viajes SET estado = 'CANCELADO' WHERE id_viaje = ?";
-                try (PreparedStatement ps = conn.prepareStatement(sqlViaje)) {
-                    ps.setInt(1, idViaje);
-                    ps.executeUpdate();
-                }
-
-                // --- 2. Marcar solicitudes pendientes como canceladas ---
-                String sqlSol = """
-                    UPDATE solicitudes_asignacion
-                    SET estado = 'EXPIRADA', fecha_respuesta = NOW()
-                    WHERE id_viaje = ? AND estado = 'PENDIENTE'
-                    """;
-                try (PreparedStatement ps = conn.prepareStatement(sqlSol)) {
-                    ps.setInt(1, idViaje);
-                    ps.executeUpdate();
-                }
-
-                // --- 3. Liberar al operador si estaba asignado ---
-                if (viaje.getIdOperador() > 0) {
-                    String sqlOp = "UPDATE operadores SET disponible = 1 WHERE id_operador = ?";
-                    try (PreparedStatement ps = conn.prepareStatement(sqlOp)) {
-                        ps.setInt(1, viaje.getIdOperador());
-                        ps.executeUpdate();
-                    }
-                }
-
-                // --- 4. Cancelar el pago si existía ---
-                String sqlPago = """
-                    UPDATE pagos SET estado_pago = 'CANCELADO'
-                    WHERE id_viaje = ? AND estado_pago = 'APROBADO'
-                    """;
-                try (PreparedStatement ps = conn.prepareStatement(sqlPago)) {
-                    ps.setInt(1, idViaje);
-                    ps.executeUpdate();
-                }
-            }
-
-            // Redirigir al dashboard con mensaje de cancelación
-            res.sendRedirect(req.getContextPath() + "/pasajero/dashboard?viaje=cancelado");
-
+            ViajeDAO.cancelar(v.getId(), "pasajero");
+            res.sendRedirect(req.getContextPath() + "/pasajero/solicitar");
         } catch (Exception e) {
-            res.sendRedirect(req.getContextPath() +
-                "/pasajero/dashboard?error=cancelacion");
+            req.setAttribute("error", "Error al cancelar el viaje.");
+            req.getRequestDispatcher("/WEB-INF/vistas/pasajero/estado.jsp").forward(req, res);
         }
     }
 }
